@@ -30,7 +30,7 @@ export const GameScreen: React.FC = () => {
             ]}
           >
             <Text style={styles.roleText}>
-              {role === 'CHASSEUR' ? '🎯 CHASSEUR' : '🏃 CHASSÉ'}
+              {role === 'CHASSEUR' ? 'CHASSEUR' : 'CHASSÉ'}
             </Text>
           </View>
         </View>
@@ -52,7 +52,7 @@ export const GameScreen: React.FC = () => {
       {/* Footer controls */}
       <View style={styles.footer}>
         <TouchableOpacity style={styles.quitButton} onPress={disconnect}>
-          <Text style={styles.quitButtonText}>🚪 QUITTER LA PARTIE</Text>
+          <Text style={styles.quitButtonText}>QUITTER LA PARTIE</Text>
         </TouchableOpacity>
       </View>
     </View>

@@ -14,8 +14,8 @@ export const TimerDisplay: React.FC<Props> = ({ seconds, phase }) => {
   };
 
   const getPhaseTitle = () => {
-    if (phase === 'HEAD_START') return '⏱️ CHRONO DE FUITE (5 MIN)';
-    if (phase === 'HUNTING') return '🛰️ RECHARTAGE DANS';
+    if (phase === 'HEAD_START') return 'CHRONO DE FUITE (5 MIN)';
+    if (phase === 'HUNTING') return 'PROCHAINE RÉVÉLATION DANS';
     return 'LOBBY EN ATTENTE';
   };
 

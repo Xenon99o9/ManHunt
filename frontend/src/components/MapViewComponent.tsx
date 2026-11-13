@@ -55,7 +55,7 @@ export const MapViewComponent: React.FC<Props> = ({
                 latitude: chasse.latitude,
                 longitude: chasse.longitude,
               }}
-              title={`🏃 ${chasse.player_name} (Chassé)`}
+              title={`${chasse.player_name} (Chassé)`}
               description={`Dernière position connue (${new Date(chasse.timestamp * 1000).toLocaleTimeString()})`}
               pinColor="#FF3B30"
             />
@@ -68,7 +68,7 @@ export const MapViewComponent: React.FC<Props> = ({
               latitude: myLocation.latitude,
               longitude: myLocation.longitude,
             }}
-            title="🏃 Ma position (Chassé)"
+            title="Ma position (Chassé)"
             pinColor="#34C759"
           />
         )}

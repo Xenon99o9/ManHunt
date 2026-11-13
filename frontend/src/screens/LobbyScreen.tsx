@@ -83,7 +83,7 @@ export const LobbyScreen: React.FC = () => {
                 ]}
               >
                 <Text style={styles.roleBadgeText}>
-                  {p.role === 'CHASSEUR' ? '🎯 CHASSEUR' : '🏃 CHASSÉ'}
+                  {p.role === 'CHASSEUR' ? 'CHASSEUR' : 'CHASSÉ'}
                 </Text>
               </View>
             </View>
@@ -92,7 +92,7 @@ export const LobbyScreen: React.FC = () => {
 
         {isHost ? (
           <TouchableOpacity style={styles.startButton} onPress={startGame}>
-            <Text style={styles.startButtonText}>🚀 LANCER LA PARTIE</Text>
+            <Text style={styles.startButtonText}>LANCER LA PARTIE</Text>
           </TouchableOpacity>
         ) : (
           <View style={styles.waitingContainer}>
@@ -107,7 +107,7 @@ export const LobbyScreen: React.FC = () => {
   // INITIAL LOBBY FORM SCREEN
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>🏃 MANHUNT 🎯</Text>
+      <Text style={styles.title}>MANHUNT</Text>
       <Text style={styles.subTitle}>Cache-cache GPS grandeur nature</Text>
 
       {/* Server URL Config */}
@@ -117,7 +117,7 @@ export const LobbyScreen: React.FC = () => {
           style={styles.input}
           value={serverUrl}
           onChangeText={setServerUrl}
-          placeholder="ws://YOUR_GCP_IP:8000"
+          placeholder="wss://votre-app.onrender.com"
           placeholderTextColor="#666"
           autoCapitalize="none"
         />
@@ -143,14 +143,14 @@ export const LobbyScreen: React.FC = () => {
             style={[styles.roleButton, role === 'CHASSE' && styles.selectedHunted]}
             onPress={() => setRole('CHASSE')}
           >
-            <Text style={styles.roleText}>🏃 CHASSÉ</Text>
+            <Text style={styles.roleText}>CHASSÉ</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={[styles.roleButton, role === 'CHASSEUR' && styles.selectedHunter]}
             onPress={() => setRole('CHASSEUR')}
           >
-            <Text style={styles.roleText}>🎯 CHASSEUR</Text>
+            <Text style={styles.roleText}>CHASSEUR</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -161,7 +161,7 @@ export const LobbyScreen: React.FC = () => {
         onPress={handleCreate}
         disabled={loading}
       >
-        <Text style={styles.buttonText}>✨ CRÉER UNE ROOM</Text>
+        <Text style={styles.buttonText}>CRÉER UNE ROOM</Text>
       </TouchableOpacity>
 
       <View style={styles.divider}>

@@ -1,23 +1,49 @@
-# 🏃 ManHunt — Cache-Cache GPS Grandeur Nature 🎯
+# ManHunt — Cache-Cache GPS Grandeur Nature
 
 **ManHunt** est une application mobile multijoueur temps réel basée sur la géolocalisation GPS, conçue pour organiser des parties de cache-cache géantes en extérieur.
 
-![Logo ManHunt](./frontend/assets/logo.svg)
+<p align="center">
+  <img src="./frontend/assets/logo.svg" width="160" alt="Logo ManHunt" />
+</p>
 
 ---
 
-## 📜 Règles du Jeu
+## 📦 Téléchargements & Releases (v1.0.0)
 
-1. **Rejoindre une partie :** Un hôte crée une Room et partage un code unique à 4 caractères.
-2. **Équipes :** Les joueurs choisissent leur rôle : **Chasseurs (🎯)** ou **Chassés (🏃)**.
+[![Release v1.0.0](https://img.shields.io/badge/Release-v1.0.0-blue.svg)](../../releases/tag/v1.0.0)
+[![Android Build](https://img.shields.io/badge/Android-APK_v1.0.0-green.svg)](../../releases/download/v1.0.0/ManHunt-v1.0.0.apk)
+[![iOS Build](https://img.shields.io/badge/iOS-IPA_TestFlight-lightgrey.svg)](../../releases/tag/v1.0.0)
+
+Les exécutables pré-générés pour mobile sont disponibles directement dans la section **[GitHub Releases v1.0.0](../../releases/tag/v1.0.0)** :
+
+- **Android (APK) :** Téléchargez et installez directement [ManHunt-v1.0.0.apk](../../releases/download/v1.0.0/ManHunt-v1.0.0.apk) sur votre smartphone.
+- **iOS (IPA / TestFlight) :** Disponible via la build EAS Expo ou fichier `.ipa` dans les assets de la release.
+
+### Générer les builds APK / iOS vous-même (Expo EAS) :
+```bash
+# Générer l'APK Android pour distribution directe
+cd frontend
+npx eas-cli build --platform android --profile preview
+
+# Créer la Release Git v1.0.0
+git tag -a v1.0.0 -m "Release initiale ManHunt v1.0.0"
+git push origin v1.0.0
+```
+
+---
+
+## 📋 Règles du Jeu
+
+1. **Rejoindre une partie :** Un hôte crée une Room et partage le code d'accès unique à 6 lettres (ex: `AMONGU`).
+2. **Équipes :** Les joueurs choisissent leur rôle : **Chasseur** ou **Chassé**.
 3. **Chrono de fuite (5 minutes d'avance) :**
-   - Au lancement de la partie, les chassés disposent de 5 minutes pour s'éloigner et se cacher.
-   - Pendant cette période, les chasseurs ont accès à un chronomètre de compte à rebours, mais **la carte Google Maps leur est verrouillée**.
+   - Au lancement de la partie, les chassés disposent de 5 minutes d'avance pour s'éloigner et se cacher.
+   - Pendant cette période, les chasseurs ont accès à un compte à rebours, mais la carte Google Maps leur est masquée.
 4. **Révélation périodique (Toutes les 5 minutes) :**
-   - Toutes les 5 minutes exactes, le serveur backend capture la position GPS actuelle de tous les chassés.
-   - Les coordonnées sont transmises en direct aux chasseurs et s'affichent sous forme de repères interactifs sur Google Maps.
+   - Toutes les 5 minutes, le serveur backend récupère la position GPS exacte de tous les chassés.
+   - Les coordonnées sont transmises en direct aux chasseurs et s'affichent sur la carte Google Maps.
 5. **Suivi GPS en arrière-plan :**
-   - Même lorsque le téléphone est verrouillé ou dans la poche, l'application transmet la position grâce aux services en arrière-plan Android / iOS (`expo-location` + `TaskManager`).
+   - L'application transmet la position même lorsque l'écran est verrouillé (`expo-location` + `TaskManager`).
 
 ---
 
@@ -26,7 +52,7 @@
 - **Backend (Python 3.11 / FastAPI) :**
   - **Stockage 100% RAM :** Aucune base de données SQL/NoSQL. Toutes les rooms et positions sont stockées dans un dictionnaire Python en mémoire vive.
   - **Communication temps réel :** WebSockets natifs avec gestionnaires de reconnexion auto et pings de maintien.
-  - **Boucle de jeu asynchrone (`asyncio`) :** Tâche d'arrière-plan autonome gérant le timer de 5 min et le déclenchement des révélations GPS.
+  - **Boucle de jeu asynchrone (`asyncio`) :** Tâche d'arrière-plan autonome gérant l'intervalle de 5 minutes.
 - **Frontend (React Native / Expo / TypeScript) :**
   - **Cartographie :** `react-native-maps` (Google Maps).
   - **GPS Arrière-plan :** `expo-location` et `TaskManager` configurés pour fonctionner avec l'écran verrouillé.
@@ -63,92 +89,60 @@ npm install
 # Lancer Expo Dev Server
 npx expo start
 ```
-*Scannez le QR Code affiché dans le terminal avec l'application **Expo Go** (Android / iOS).*
+*Scannez le QR Code affiché dans le terminal avec l'application Expo Go (Android / iOS).*
 
 ---
 
-## 🌐 Guide de Déploiement
+## 🌐 Guide de Déploiement Backend
 
-### Option A : Déploiement sur un Serveur Loué (VPS / GCP / Hetzner / OVH)
+### Option A : Déploiement sur Serveur Loué (VPS / GCP / Hetzner / OVH)
 
-#### 1. Installer Docker sur le serveur Linux
 ```bash
+# 1. Installer Docker sur le serveur Linux
 sudo apt update && sudo apt install -y docker.io git
-sudo systemctl start docker
-sudo systemctl enable docker
-```
+sudo systemctl start docker && sudo systemctl enable docker
 
-#### 2. Récupérer le code et builder le conteneur Docker
-```bash
+# 2. Cloner et builder le conteneur
 git clone https://github.com/votre-compte/manHunt.git
 cd manHunt/backend
-
-# Builder l'image Docker
 docker build -t manhunt-backend .
 
-# Exécuter le conteneur en arrière-plan (redémarrage auto)
-docker run -d \
-  --name manhunt-server \
-  -p 8000:8000 \
-  --restart always \
-  manhunt-backend
+# 3. Exécuter en arrière-plan
+docker run -d --name manhunt-server -p 8000:8000 --restart always manhunt-backend
 ```
-
-#### 3. Ouvrir le port 8000 sur le pare-feu du serveur
-- **UFW (Ubuntu) :** `sudo ufw allow 8000/tcp`
-- **GCP / AWS / Cloud Provider :** Ajoutez une règle de pare-feu entrante autorisant le port TCP `8000`.
-
 Dans l'application mobile, renseignez : `ws://<IP_DE_VOTRE_SERVEUR>:8000`
 
 ---
 
-### Option B : Déploiement Gratuite sur Render.com (Render Free Tier)
+### Option B : Déploiement Gratuit sur Render.com
 
-[Render.com](https://render.com/) permet d'héberger le backend FastAPI gratuitement en quelques clics.
-
-#### Étapes de configuration sur Render :
-
-1. Connectez-vous sur [Render.com](https://render.com/) et cliquez sur **New +** > **Web Service**.
-2. Connectez votre dépôt GitHub `manHunt`.
-3. Remplissez les informations de déploiement :
-   - **Name :** `manhunt-backend`
-   - **Region :** Choisissez la région la plus proche de chez vous (ex: Frankfurt / Oregon).
-   - **Language / Environment :** `Docker` (Render utilisera automatiquement le [Dockerfile](file:///home/xenon99o9/Documents/projects/manHunt/backend/Dockerfile)).
-   - **Instance Type :** `Free` ($0/month).
-4. Cliquez sur **Create Web Service**.
-
-#### Important pour les WebSockets sur Render :
-Render génère une URL HTTPS sécurisée (ex: `https://manhunt-backend.onrender.com`). 
-Dans l'application mobile Expo, vous devez spécifier le protocole sécurisé **`wss://`** :
-```text
-wss://manhunt-backend.onrender.com
-```
-
-> **Note sur le plan gratuit Render :** Les services gratuits s'endorment après 15 minutes d'inactivité. La première connexion lors du lancement d'une partie peut prendre 30 secondes le temps que le serveur se réveille.
+1. Créez un **Web Service** sur Render.com et connectez votre dépôt GitHub `manHunt`.
+2. Sélectionnez le Runtime **Docker** (détecte automatiquement le `Dockerfile`).
+3. Dans l'application mobile Expo, renseignez l'URL sécurisée générée par Render :
+   ```text
+   wss://votre-app.onrender.com
+   ```
 
 ---
 
-## 📂 Structure des Fichiers du Projet
+## 📂 Structure du Projet
 
 ```text
 manHunt/
-├── README.md                  # Ce guide explicatif
-├── .gitignore                 # Exclusion des fichiers sensibles / temporaires
+├── README.md                  # Documentation du projet
+├── .gitignore                 # Exclusion des fichiers temporaires/sensibles
 ├── backend/
-│   ├── Dockerfile             # Configuration Docker
-│   ├── requirements.txt       # Dépendances Python
+│   ├── Dockerfile             # Configuration Docker pour déploiement
+│   ├── requirements.txt       # Dépendances Python (FastAPI, Uvicorn, WebSockets)
 │   └── app/
-│       ├── main.py            # API FastAPI & Routes WebSockets
-│       ├── models.py          # Modèles Pydantic (Player, Room, Role)
-│       ├── state.py           # Stockage RAM en mémoire vive
-│       ├── websocket_manager.py # Gestion des connexions actives
-│       └── game_loop.py       # Boucle de jeu (Timer 5 min & Reveal)
+│       └── main.py            # API FastAPI, WebSockets & Boucle 5 min
 └── frontend/
-    ├── app.json               # Config Expo (Permissions GPS arrière-plan)
+    ├── app.json               # Config Expo & Permissions GPS arrière-plan
     ├── package.json
-    ├── App.tsx                # Entrée React Native
-    └── assets/
-        ├── logo.svg           # Logo vectoriel ManHunt
-        ├── icon.png           # Icône mobile
-        └── splash.png         # Écran de chargement
+    ├── App.tsx                # Entrée principale React Native
+    └── src/
+        ├── components/        # MapViewComponent et TimerDisplay
+        ├── context/           # GameContext (Gestion d'état et WS)
+        ├── screens/           # LobbyScreen et GameScreen
+        └── services/          # TaskManager & Background Location
 ```
