@@ -10,8 +10,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status, HTTPExcepti
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Configuration du logging
-logging.basicConfig(level=logging.INFO)
+# Configuration du logging ultra-détaillé pour la console Render
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("manhunt.backend")
 
 # ============================================================================
@@ -40,8 +40,8 @@ class Room:
 
         # Options configurables par l'hôte
         self.head_start_duration: int = 300  # 5 minutes de fuite par défaut
-        self.reveal_interval: int = 300      # 5 minutes par défaut entre chaque reveal (60s, 120s, 180s, 300s, 600s)
-        self.role_mode: str = "FREE"         # 'FREE' (libre), 'HOST' (par l'hôte), 'RANDOM' (aléatoire)
+        self.reveal_interval: int = 300      # 5 minutes par défaut entre chaque reveal
+        self.role_mode: str = "FREE"         # 'FREE', 'HOST', 'RANDOM'
         self.max_hunters: int = 1            # Utilisé pour le mode aléatoire
 
         self.last_reveal_time: Optional[float] = None
@@ -51,12 +51,11 @@ class Room:
         self.players: Dict[str, PlayerConnection] = {}
 
 
-# Dictionnaire global stocké exclusivement en RAM (Aucune BDD)
+# Dictionnaire global stocké exclusivement en RAM
 ROOMS: Dict[str, Room] = {}
 
 
 def generate_unique_room_code(length: int = 6) -> str:
-    """Génère un code d'accès unique à 6 lettres majuscules (ex: 'AMONGU')."""
     alphabet = string.ascii_uppercase
     while True:
         code = "".join(secrets.choice(alphabet) for _ in range(length))
@@ -65,7 +64,6 @@ def generate_unique_room_code(length: int = 6) -> str:
 
 
 def build_room_state_payload(room: Room) -> dict:
-    """Formate l'état de la room pour l'envoi au frontend React Native."""
     players_dict = {}
     player_ids = list(room.players.keys())
     for p_id, p in room.players.items():
@@ -95,22 +93,22 @@ def build_room_state_payload(room: Room) -> dict:
 
 
 async def broadcast_room_state(room_code: str):
-    """Envoie l'état mis à jour de la room à tous les joueurs connectés."""
     if room_code in ROOMS:
         room = ROOMS[room_code]
+        payload_data = build_room_state_payload(room)
+        logger.info(f"📣 [BROADCAST ROOM_STATE] Room [{room_code}] State={room.state} Players={len(room.players)}")
         message = {
             "action": "ROOM_STATE",
-            "payload": build_room_state_payload(room)
+            "payload": payload_data
         }
         for player in list(room.players.values()):
             try:
                 await player.websocket.send_json(message)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"⚠️ Erreur d'envoi ROOM_STATE au joueur {player.player_id}: {e}")
 
 
 async def broadcast_hunted_positions(room: Room):
-    """Extraction et envoi des coordonnées GPS des chassés aux chasseurs."""
     current_time = time.time()
     hunted_positions = []
     for player in room.players.values():
@@ -141,9 +139,9 @@ async def broadcast_hunted_positions(room: Room):
                 await player.websocket.send_json(payload)
                 hunted_sent_count += 1
             except Exception as e:
-                logger.warning(f"Erreur d'envoi WebSocket au chasseur {player.player_id}: {e}")
+                logger.warning(f"⚠️ Erreur d'envoi HUNTED_POSITIONS_REVEAL au chasseur {player.player_id}: {e}")
 
-    logger.info(f"Room [{room.code}] : Révélation de {len(hunted_positions)} position(s) transmise(s) à {hunted_sent_count} chasseur(s).")
+    logger.info(f"🛰️ [REVEAL GPS] Room [{room.code}] : {len(hunted_positions)} position(s) transmise(s) à {hunted_sent_count} chasseur(s) : {hunted_positions}")
 
 
 # ============================================================================
@@ -151,13 +149,7 @@ async def broadcast_hunted_positions(room: Room):
 # ============================================================================
 
 async def location_broadcast_loop():
-    """
-    Tâche d'arrière-plan autonome s'exécutant chaque seconde.
-    - Met à jour les décomptes TIMER_TICK (1s).
-    - Déclenche le passage de HEAD_START -> HUNTING quand le chrono atteint 0.
-    - Déclenche la révélation des positions des chassés aux chasseurs selon l'intervalle choisi.
-    """
-    logger.info("⚡ Démarrage de la boucle asynchrone autonome (tick: 1s).")
+    logger.info("⚡ Démarrage de la boucle asynchrone de gestion de partie (tick: 1s).")
     while True:
         try:
             await asyncio.sleep(1)
@@ -188,7 +180,7 @@ async def location_broadcast_loop():
                         room.state = "HUNTING"
                         room.last_reveal_time = current_time
                         room.next_reveal_time = current_time + room.reveal_interval
-                        logger.info(f"Room [{room_code}] : Fin du chrono de fuite. Début de la HUNTING phase !")
+                        logger.info(f"🎯 [TRANSITION STATE] Room [{room_code}] HEAD_START terminé -> HUNTING Démarré !")
 
                         await broadcast_hunted_positions(room)
                         await broadcast_room_state(room_code)
@@ -213,6 +205,7 @@ async def location_broadcast_loop():
 
                     # Intervalle atteint -> Nouvelle révélation des positions
                     if current_time >= next_reveal:
+                        logger.info(f"🛰️ [TIMER REVEAL TRIGGER] Room [{room_code}] Déclenchement de la révélation périodique.")
                         await broadcast_hunted_positions(room)
                         room.last_reveal_time = current_time
                         room.next_reveal_time = current_time + room.reveal_interval
@@ -220,7 +213,7 @@ async def location_broadcast_loop():
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.error(f"Erreur dans la boucle de jeu: {e}", exc_info=True)
+            logger.error(f"❌ Erreur critique boucle de jeu: {e}", exc_info=True)
 
 
 @asynccontextmanager
@@ -275,7 +268,7 @@ def create_game():
     new_room = Room(code=room_code)
     ROOMS[room_code] = new_room
 
-    logger.info(f"✨ Nouvelle partie créée. Room Code: [{room_code}]")
+    logger.info(f"✨ [HTTP CREATE_GAME] Room créée : [{room_code}]. Total rooms RAM: {len(ROOMS)}")
     return {
         "room_code": room_code,
         "message": "Game room created successfully",
@@ -287,6 +280,7 @@ def create_game():
 def update_location_http(room_code: str, player_id: str, payload: LocationPayload):
     room_code_upper = room_code.upper()
     if room_code_upper not in ROOMS:
+        logger.warning(f"⚠️ [HTTP LOCATION 404] Room {room_code_upper} non trouvée")
         raise HTTPException(status_code=404, detail="Room not found")
 
     room = ROOMS[room_code_upper]
@@ -295,6 +289,7 @@ def update_location_http(room_code: str, player_id: str, payload: LocationPayloa
         player.latitude = payload.latitude
         player.longitude = payload.longitude
         player.last_updated = time.time()
+        logger.info(f"📍 [HTTP LOCATION SYNC] Player [{player_id}] Room [{room_code_upper}] Lat={payload.latitude} Lng={payload.longitude}")
         return {"status": "success"}
 
     raise HTTPException(status_code=404, detail="Player not found in room")
@@ -310,11 +305,12 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: st
     normalized_role = role.lower()
 
     if normalized_role not in ("chasseur", "chasse"):
+        logger.warning(f"⛔ [WS REJECT] Rôle invalide : {role}")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid role. Must be 'chasseur' or 'chasse'")
         return
 
     if room_code_upper not in ROOMS:
-        logger.warning(f"⛔ Connexion WebSocket refusée. Code room inconnu : [{room_code_upper}]")
+        logger.warning(f"⛔ [WS REJECT] Room inconnue : [{room_code_upper}] par {player_id}")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Room code does not exist")
         return
 
@@ -324,7 +320,7 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: st
     player_conn = PlayerConnection(player_id=player_id, role=normalized_role, websocket=websocket)
     room.players[player_id] = player_conn
 
-    logger.info(f"🎮 Joueur [{player_id}] ({normalized_role}) connecté à [{room_code_upper}]. Total: {len(room.players)}")
+    logger.info(f"🔌 [WS CONNECT] Player [{player_id}] Role [{normalized_role}] Room [{room_code_upper}]. Total joueurs dans room: {len(room.players)}")
 
     await broadcast_room_state(room_code_upper)
 
@@ -337,25 +333,25 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: st
                 payload = data.get("payload", {})
                 if "player_name" in payload:
                     player_conn.name = payload["player_name"]
+                logger.info(f"👤 [JOIN_ROOM] Player [{player_id}] Name set to [{player_conn.name}]")
                 await broadcast_room_state(room_code_upper)
 
-            # Mise à jour de la configuration de la partie par l'hôte
             elif action == "UPDATE_CONFIG":
                 player = room.players.get(player_id)
                 player_ids = list(room.players.keys())
-                if player and player_ids and player_id == player_ids[0]:  # Verifier que c'est l'hôte
+                if player and player_ids and player_id == player_ids[0]:
                     payload = data.get("payload", {})
                     if "reveal_interval" in payload:
                         interval = int(payload["reveal_interval"])
                         room.reveal_interval = interval
-                        room.head_start_duration = interval  # Met également à jour le temps de fuite initial !
+                        room.head_start_duration = interval
                     if "role_mode" in payload:
                         room.role_mode = str(payload["role_mode"])
                     if "max_hunters" in payload:
                         room.max_hunters = int(payload["max_hunters"])
+                    logger.info(f"⚙️ [UPDATE_CONFIG] Room [{room_code_upper}] Interval={room.reveal_interval}s Mode={room.role_mode} MaxHunters={room.max_hunters}")
                     await broadcast_room_state(room_code_upper)
 
-            # L'hôte modifie le rôle d'un joueur directement
             elif action == "CHANGE_PLAYER_ROLE":
                 player = room.players.get(player_id)
                 player_ids = list(room.players.keys())
@@ -365,14 +361,13 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: st
                     new_role = payload.get("role", "").lower()
                     if target_id in room.players and new_role in ("chasseur", "chasse"):
                         room.players[target_id].role = new_role
+                        logger.info(f"🔄 [CHANGE_ROLE] Target [{target_id}] set to [{new_role}] by Host [{player_id}]")
                         await broadcast_room_state(room_code_upper)
 
-            # Lancement de la partie
             elif action == "START_GAME":
                 player = room.players.get(player_id)
                 player_ids = list(room.players.keys())
                 if player and player_ids and player_id == player_ids[0]:
-                    # Attribution aléatoire si le mode RANDOM est activé
                     if room.role_mode == "RANDOM":
                         all_p_ids = list(room.players.keys())
                         random.shuffle(all_p_ids)
@@ -386,6 +381,8 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: st
                     room.state = "HEAD_START"
                     room.start_time = time.time()
 
+                    logger.info(f"🚀 [START_GAME] Room [{room_code_upper}] STARTED! HeadStartDuration={room.head_start_duration}s Mode={room.role_mode}")
+
                     start_msg = {
                         "action": "GAME_STARTED",
                         "payload": {
@@ -396,22 +393,23 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: st
                     for p in list(room.players.values()):
                         try:
                             await p.websocket.send_json(start_msg)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"⚠️ Erreur d'envoi GAME_STARTED au joueur {p.player_id}: {e}")
                     await broadcast_room_state(room_code_upper)
 
             elif "latitude" in data and "longitude" in data:
                 player_conn.latitude = float(data["latitude"])
                 player_conn.longitude = float(data["longitude"])
                 player_conn.last_updated = time.time()
+                logger.info(f"📍 [WS GPS UPDATE] Room [{room_code_upper}] Player [{player_id}] ({player_conn.role}): Lat={player_conn.latitude}, Lng={player_conn.longitude}")
 
             elif action == "PING":
                 await websocket.send_json({"type": "PONG", "timestamp": time.time()})
 
     except WebSocketDisconnect:
-        logger.info(f"👋 Déconnexion de [{player_id}] de [{room_code_upper}].")
+        logger.info(f"👋 [WS DISCONNECT] Player [{player_id}] disconnected from Room [{room_code_upper}].")
     except Exception as e:
-        logger.error(f"Erreur WebSocket [{player_id}] room [{room_code_upper}]: {e}")
+        logger.error(f"❌ [WS CRITICAL ERROR] Player [{player_id}] Room [{room_code_upper}]: {e}", exc_info=True)
     finally:
         if room_code_upper in ROOMS:
             room = ROOMS[room_code_upper]
@@ -419,6 +417,6 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: st
 
             if len(room.players) == 0:
                 del ROOMS[room_code_upper]
-                logger.info(f"🧹 GARBAGE COLLECTION: [{room_code_upper}] supprimée de la RAM.")
+                logger.info(f"🧹 [GARBAGE COLLECTION] Room [{room_code_upper}] vide -> supprimée de la RAM.")
             else:
                 await broadcast_room_state(room_code_upper)
