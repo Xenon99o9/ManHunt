@@ -19,8 +19,9 @@ logger = logging.getLogger("manhunt.backend")
 
 class PlayerConnection:
     """Représente un joueur connecté et ses coordonnées GPS actuelles."""
-    def __init__(self, player_id: str, role: str, websocket: WebSocket):
+    def __init__(self, player_id: str, role: str, websocket: WebSocket, name: str = ""):
         self.player_id = player_id
+        self.name = name or player_id
         self.role = role.lower()  # 'chasseur' ou 'chasse'
         self.websocket = websocket
         self.latitude: Optional[float] = None
@@ -32,7 +33,9 @@ class Room:
     """Représente une partie active en mémoire vive."""
     def __init__(self, code: str):
         self.code = code
+        self.state: str = "LOBBY"
         self.created_at: float = time.time()
+        self.start_time: Optional[float] = None
         # Dictionnaire d'associativité : player_id -> PlayerConnection
         self.players: Dict[str, PlayerConnection] = {}
 
@@ -48,6 +51,49 @@ def generate_unique_room_code(length: int = 6) -> str:
         code = "".join(secrets.choice(alphabet) for _ in range(length))
         if code not in ROOMS:
             return code
+
+
+def build_room_state_payload(room: Room) -> dict:
+    """Formate l'état de la room pour l'envoi au frontend React Native."""
+    players_dict = {}
+    player_ids = list(room.players.keys())
+    for p_id, p in room.players.items():
+        players_dict[p_id] = {
+            "id": p.player_id,
+            "name": p.name,
+            "role": p.role.upper(),
+            "is_host": (p_id == player_ids[0]),
+            "is_connected": True,
+            "location": {
+                "latitude": p.latitude,
+                "longitude": p.longitude,
+                "timestamp": p.last_updated
+            } if p.latitude is not None else None
+        }
+    return {
+        "code": room.code,
+        "state": room.state,
+        "created_at": room.created_at,
+        "start_time": room.start_time,
+        "head_start_duration": 300,
+        "reveal_interval": 300,
+        "players": players_dict
+    }
+
+
+async def broadcast_room_state(room_code: str):
+    """Envoie l'état mis à jour de la room à tous les joueurs connectés."""
+    if room_code in ROOMS:
+        room = ROOMS[room_code]
+        message = {
+            "action": "ROOM_STATE",
+            "payload": build_room_state_payload(room)
+        }
+        for player in list(room.players.values()):
+            try:
+                await player.websocket.send_json(message)
+            except Exception:
+                pass
 
 
 # ============================================================================
@@ -74,6 +120,7 @@ async def location_broadcast_loop():
                     if player.role == "chasse" and player.latitude is not None and player.longitude is not None:
                         hunted_positions.append({
                             "player_id": player.player_id,
+                            "player_name": player.name,
                             "latitude": player.latitude,
                             "longitude": player.longitude,
                             "last_updated": player.last_updated
@@ -81,10 +128,14 @@ async def location_broadcast_loop():
 
                 # 2. Construction du paquet JSON réservé aux chasseurs
                 payload = {
+                    "action": "HUNTED_POSITIONS_REVEAL",
                     "type": "HUNTED_POSITIONS_REVEAL",
                     "timestamp": current_time,
                     "hunted_count": len(hunted_positions),
-                    "hunted_positions": hunted_positions
+                    "hunted_positions": hunted_positions,
+                    "payload": {
+                        "chasses": hunted_positions
+                    }
                 }
 
                 # 3. Diffusion EXCLUSIVE aux WebSockets des "chasseurs"
@@ -203,7 +254,8 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: st
     """
     Endpoint WebSocket temps réel.
     - Rejette la connexion si le room_code n'existe pas en RAM.
-    - Accepte la connexion et enregistre les coordonnées GPS reçues.
+    - Accepte la connexion et enregistre le joueur et ses coordonnées GPS.
+    - Diffuse immédiatement l'état de la room (ROOM_STATE).
     - Supprime automatiquement la room (Garbage Collection) à la déconnexion du dernier joueur.
     """
     room_code_upper = room_code.upper()
@@ -229,25 +281,47 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: st
 
     logger.info(f"🎮 Joueur [{player_id}] ({normalized_role}) connecté à la room [{room_code_upper}]. Total: {len(room.players)}")
 
-    # Envoi de confirmation initiale au client
-    await websocket.send_json({
-        "type": "CONNECTED",
-        "room_code": room_code_upper,
-        "player_id": player_id,
-        "role": normalized_role
-    })
+    # Envoi immédiat de l'état de la room au joueur et broadcast aux membres
+    await broadcast_room_state(room_code_upper)
 
     try:
         while True:
             data = await websocket.receive_json()
+            action = data.get("action") or data.get("type")
+
+            # Mettre à jour le pseudo du joueur s'il est reçu
+            if action == "JOIN_ROOM":
+                payload = data.get("payload", {})
+                if "player_name" in payload:
+                    player_conn.name = payload["player_name"]
+                await broadcast_room_state(room_code_upper)
+
+            elif action == "START_GAME":
+                room.state = "HEAD_START"
+                room.start_time = time.time()
+
+                # Broadcaster l'événement de démarrage
+                start_msg = {
+                    "action": "GAME_STARTED",
+                    "payload": {
+                        "head_start_duration": 300,
+                        "reveal_interval": 300
+                    }
+                }
+                for p in list(room.players.values()):
+                    try:
+                        await p.websocket.send_json(start_msg)
+                    except Exception:
+                        pass
+                await broadcast_room_state(room_code_upper)
 
             # Mise à jour continue des coordonnées GPS envoyées par l'application mobile
-            if "latitude" in data and "longitude" in data:
+            elif "latitude" in data and "longitude" in data:
                 player_conn.latitude = float(data["latitude"])
                 player_conn.longitude = float(data["longitude"])
                 player_conn.last_updated = time.time()
 
-            elif data.get("type") == "PING":
+            elif action == "PING":
                 await websocket.send_json({"type": "PONG", "timestamp": time.time()})
 
     except WebSocketDisconnect:
@@ -264,3 +338,5 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: st
             if len(room.players) == 0:
                 del ROOMS[room_code_upper]
                 logger.info(f"🧹 GARBAGE COLLECTION: La room [{room_code_upper}] est vide et a été définitivement supprimée de la RAM.")
+            else:
+                await broadcast_room_state(room_code_upper)

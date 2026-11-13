@@ -10,28 +10,28 @@
 
 ## 📲 Téléchargements & Releases
 
-| Plateforme | Version | Fichier d'installation |
-| :--- | :--- | :--- |
-| **Android** | `v1.0.0` | [Télécharger ManHunt-v1.0.0.apk](../../releases/download/v1.0.0/ManHunt-v1.0.0.apk) |
-| **iOS** | `v1.0.0` | [Voir la Release v1.0.0 (TestFlight / IPA)](../../releases/tag/v1.0.0) |
+Les exécutables pré-générés pour mobile sont hébergés dans la section **[GitHub Releases](../../releases)** du projet :
+
+- **Android (APK) :** Téléchargez la dernière version disponible sur la page [GitHub Releases](../../releases).
+- **iOS (IPA / TestFlight) :** Téléchargez le paquet iOS ou suivez le lien de distribution sur [GitHub Releases](../../releases).
 
 > 📌 **Note d'installation Android :** Si vous téléchargez le fichier APK directement sur votre téléphone, autorisez l'installation d'applications issues de sources inconnues dans les paramètres de votre navigateur mobile.
 
 ---
 
-## 🛠️ Générer les exécutions (Build Expo EAS)
+## 🛠️ Générer les exécutables (Build Expo EAS)
 
-Si vous souhaitez builder vous-même le fichier `.apk` pour Android ou `.ipa` pour iOS :
+Si vous souhaitez builder vous-même le fichier `.apk` pour Android ou `.ipa` pour iOS avec Expo EAS :
 
 ```bash
 # 1. Se positionner dans le dossier frontend
 cd frontend
 
-# 2. Builder l'APK Android (Preview Distribution)
+# 2. Builder l'APK Android (Distribution directe)
 npx eas-cli build --platform android --profile preview
 
-# 3. Tag de version Git v1.0.0
-git tag -a v1.0.0 -m "Version v1.0.0 - Release initiale"
+# 3. Créer et pusher la version Git v1.0.0
+git tag -a v1.0.0 -m "Release v1.0.0"
 git push origin v1.0.0
 ```
 
