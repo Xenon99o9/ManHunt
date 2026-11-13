@@ -43,16 +43,17 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const wsRef = useRef<GameWebSocket | null>(null);
 
-  const handleWSMessage = (msg: WSMessage) => {
-    switch (msg.action) {
+  const handleWSMessage = (msg: any) => {
+    const action = msg.action || msg.type;
+    switch (action) {
       case 'ROOM_STATE':
         setRoom(msg.payload);
         break;
 
       case 'GAME_STARTED':
         setTimerPhase('HEAD_START');
-        setTimerSeconds(msg.payload.head_start_duration);
-        setTimerTotal(msg.payload.head_start_duration);
+        setTimerSeconds(msg.payload?.head_start_duration || 300);
+        setTimerTotal(msg.payload?.head_start_duration || 300);
         break;
 
       case 'TIMER_TICK':
@@ -62,28 +63,23 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         break;
 
       case 'LOCATION_REVEAL':
-        if (msg.payload && msg.payload.chasses) {
-          console.log('[Context] New GPS Reveal received:', msg.payload.chasses);
-          setChasseReveals(msg.payload.chasses);
-        }
+      case 'HUNTED_POSITIONS_REVEAL':
+        const positions = msg.payload?.chasses || msg.hunted_positions || [];
+        console.log('[Context] New GPS Reveal received:', positions);
+        setChasseReveals(positions);
         break;
 
       case 'ERROR':
-        alert(`Erreur: ${msg.payload?.message}`);
+        alert(`Erreur: ${msg.payload?.message || msg.reason}`);
         break;
     }
   };
 
   const createRoom = async (name: string, selectedRole: Role): Promise<string> => {
     const httpUrl = serverUrl.replace(/^ws/, 'http');
-    const res = await fetch(`${httpUrl}/api/rooms`, {
+    const res = await fetch(`${httpUrl}/create-game`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        host_name: name,
-        host_role: selectedRole,
-        player_id: playerId,
-      }),
     });
 
     if (!res.ok) throw new Error('Impossible de créer la Room');
@@ -109,7 +105,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       wsRef.current.disconnect();
     }
 
-    const ws = new GameWebSocket(serverUrl, roomCode, playerId);
+    const ws = new GameWebSocket(serverUrl, roomCode, playerId, selectedRole);
     wsRef.current = ws;
 
     ws.subscribe(handleWSMessage);

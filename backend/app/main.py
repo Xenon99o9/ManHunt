@@ -1,39 +1,131 @@
 import asyncio
 import logging
+import secrets
+import string
 import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, status
+from typing import Dict, Optional
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from app.models import Role, GameState, WSAction, WSMessage
-from app.state import (
-    create_room, get_room, join_room, remove_player, update_player_location
-)
-from app.websocket_manager import manager
-from app.game_loop import game_loop_task
-
+# Configuration du logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("manhunt.main")
+logger = logging.getLogger("manhunt.backend")
+
+# ============================================================================
+# 1. STATE MANAGEMENT EN RAM (Dictionnaire Global sans BDD)
+# ============================================================================
+
+class PlayerConnection:
+    """Représente un joueur connecté et ses coordonnées GPS actuelles."""
+    def __init__(self, player_id: str, role: str, websocket: WebSocket):
+        self.player_id = player_id
+        self.role = role.lower()  # 'chasseur' ou 'chasse'
+        self.websocket = websocket
+        self.latitude: Optional[float] = None
+        self.longitude: Optional[float] = None
+        self.last_updated: Optional[float] = None
+
+
+class Room:
+    """Représente une partie active en mémoire vive."""
+    def __init__(self, code: str):
+        self.code = code
+        self.created_at: float = time.time()
+        # Dictionnaire d'associativité : player_id -> PlayerConnection
+        self.players: Dict[str, PlayerConnection] = {}
+
+
+# Dictionnaire global stocké exclusivement en RAM (Aucune BDD)
+ROOMS: Dict[str, Room] = {}
+
+
+def generate_unique_room_code(length: int = 6) -> str:
+    """Génère un code d'accès unique à 6 lettres majuscules (ex: 'AMONGU')."""
+    alphabet = string.ascii_uppercase
+    while True:
+        code = "".join(secrets.choice(alphabet) for _ in range(length))
+        if code not in ROOMS:
+            return code
+
+
+# ============================================================================
+# 4. FILTRAGE DE DIFFUSION (Boucle asynchrone 5 minutes)
+# ============================================================================
+
+async def location_broadcast_loop():
+    """
+    Tâche d'arrière-plan autonome s'exécutant toutes les 5 minutes (300 secondes).
+    Récupère les positions GPS des 'chassés' de chaque room et les envoie
+    EXCLUSIVEMENT aux WebSockets des 'chasseurs' de la même room.
+    """
+    logger.info("⚡ Démarrage de la boucle asynchrone de diffusion GPS (intervalle: 5 min).")
+    while True:
+        try:
+            await asyncio.sleep(300)  # Attente de 5 minutes (300 secondes)
+            current_time = time.time()
+
+            # Parcours de toutes les rooms actives stockées en RAM
+            for room_code, room in list(ROOMS.items()):
+                # 1. Extraction des coordonnées GPS actuelles des "chassés"
+                hunted_positions = []
+                for player in room.players.values():
+                    if player.role == "chasse" and player.latitude is not None and player.longitude is not None:
+                        hunted_positions.append({
+                            "player_id": player.player_id,
+                            "latitude": player.latitude,
+                            "longitude": player.longitude,
+                            "last_updated": player.last_updated
+                        })
+
+                # 2. Construction du paquet JSON réservé aux chasseurs
+                payload = {
+                    "type": "HUNTED_POSITIONS_REVEAL",
+                    "timestamp": current_time,
+                    "hunted_count": len(hunted_positions),
+                    "hunted_positions": hunted_positions
+                }
+
+                # 3. Diffusion EXCLUSIVE aux WebSockets des "chasseurs"
+                hunted_sent_count = 0
+                for player in list(room.players.values()):
+                    if player.role == "chasseur":
+                        try:
+                            await player.websocket.send_json(payload)
+                            hunted_sent_count += 1
+                        except Exception as e:
+                            logger.warning(f"Erreur d'envoi WebSocket au chasseur {player.player_id}: {e}")
+
+                logger.info(
+                    f"Room [{room_code}] : Révélation de {len(hunted_positions)} position(s) de chassé(s) "
+                    f"transmise(s) à {hunted_sent_count} chasseur(s)."
+                )
+
+        except asyncio.CancelledError:
+            logger.info("Boucle de diffusion GPS interrompue.")
+            break
+        except Exception as e:
+            logger.error(f"Erreur dans la boucle de diffusion GPS: {e}", exc_info=True)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Start async background game loop task
-    game_task = asyncio.create_task(game_loop_task())
+    # Démarrage de la tâche de fond asyncio
+    broadcast_task = asyncio.create_task(location_broadcast_loop())
     yield
-    # Shutdown: Cancel game loop task
-    game_task.cancel()
+    # Nettoyage à l'arrêt du serveur
+    broadcast_task.cancel()
     try:
-        await game_task
+        await broadcast_task
     except asyncio.CancelledError:
-        logger.info("Game loop task cancelled successfully.")
+        pass
 
 
 app = FastAPI(
-    title="ManHunt API",
-    description="Backend in-memory for multiplayer ManHunt game",
-    version="1.0.0",
+    title="ManHunt Backend API",
+    description="Backend in-memory sécurisé pour jeu mobile cache-cache GPS",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -46,148 +138,129 @@ app.add_middleware(
 )
 
 
-# HTTP Schemas
-class CreateRoomRequest(BaseModel):
-    host_name: str
-    host_role: Role
-    player_id: str
-
-
-class LocationUpdateRequest(BaseModel):
-    player_id: str
+# Schemas Pydantic
+class LocationPayload(BaseModel):
     latitude: float
     longitude: float
 
 
+# ============================================================================
+# 2. CRÉATION DE ROOM SÉCURISÉE (Endpoint HTTP /create-game)
+# ============================================================================
+
 @app.get("/")
 def read_root():
-    return {"status": "online", "message": "ManHunt FastAPI Server Running"}
-
-
-@app.post("/api/rooms/{room_code}/location")
-def api_update_location(room_code: str, req: LocationUpdateRequest):
-    success = update_player_location(room_code, req.player_id, req.latitude, req.longitude)
-    if not success:
-        raise HTTPException(status_code=404, detail="Room or player not found")
-    return {"status": "success"}
-
-
-
-@app.post("/api/rooms", status_code=status.HTTP_201_CREATED)
-def api_create_room(req: CreateRoomRequest):
-    room = create_room(
-        host_name=req.host_name,
-        host_role=req.host_role,
-        host_player_id=req.player_id
-    )
     return {
-        "room_code": room.code,
-        "player_id": req.player_id,
-        "room": room.model_dump()
+        "status": "online",
+        "service": "ManHunt FastAPI Backend",
+        "active_rooms_count": len(ROOMS)
     }
 
 
-@app.get("/api/rooms/{room_code}")
-def api_get_room(room_code: str):
-    room = get_room(room_code)
-    if not room:
+@app.post("/create-game", status_code=status.HTTP_201_CREATED)
+@app.get("/create-game", status_code=status.HTTP_201_CREATED)
+def create_game():
+    """
+    Génère et renvoie un code d'accès aléatoire et unique à 6 lettres majuscules (ex: 'AMONGU').
+    Instancie la room associée dans le dictionnaire global en RAM.
+    """
+    room_code = generate_unique_room_code(length=6)
+    new_room = Room(code=room_code)
+    ROOMS[room_code] = new_room
+
+    logger.info(f"✨ Nouvelle partie créée. Room Code: [{room_code}]")
+    return {
+        "room_code": room_code,
+        "message": "Game room created successfully",
+        "created_at": new_room.created_at
+    }
+
+
+@app.post("/api/rooms/{room_code}/location")
+def update_location_http(room_code: str, player_id: str, payload: LocationPayload):
+    """Endpoint de secours HTTP pour mise à jour GPS en arrière-plan."""
+    room_code_upper = room_code.upper()
+    if room_code_upper not in ROOMS:
         raise HTTPException(status_code=404, detail="Room not found")
-    return room.model_dump()
+
+    room = ROOMS[room_code_upper]
+    if player_id in room.players:
+        player = room.players[player_id]
+        player.latitude = payload.latitude
+        player.longitude = payload.longitude
+        player.last_updated = time.time()
+        return {"status": "success"}
+
+    raise HTTPException(status_code=404, detail="Player not found in room")
 
 
-@app.websocket("/ws/{room_code}/{player_id}")
-async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: str):
-    room_code = room_code.upper()
-    await manager.connect(room_code, player_id, websocket)
-    logger.info(f"Player {player_id} connected to WebSocket room {room_code}")
+# ============================================================================
+# 3. CONNEXION WEBSOCKET & 5. GARBAGE COLLECTION
+# ============================================================================
+
+@app.websocket("/ws/{room_code}/{player_id}/{role}")
+async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: str, role: str):
+    """
+    Endpoint WebSocket temps réel.
+    - Rejette la connexion si le room_code n'existe pas en RAM.
+    - Accepte la connexion et enregistre les coordonnées GPS reçues.
+    - Supprime automatiquement la room (Garbage Collection) à la déconnexion du dernier joueur.
+    """
+    room_code_upper = room_code.upper()
+    normalized_role = role.lower()
+
+    # Validation du rôle
+    if normalized_role not in ("chasseur", "chasse"):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid role. Must be 'chasseur' or 'chasse'")
+        return
+
+    # 3. Validation de l'existence du room_code dans le dictionnaire RAM
+    if room_code_upper not in ROOMS:
+        logger.warning(f"⛔ Connexion WebSocket refusée. Code room inconnu : [{room_code_upper}]")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Room code does not exist")
+        return
+
+    # Connexion acceptée par le serveur
+    await websocket.accept()
+    room = ROOMS[room_code_upper]
+
+    player_conn = PlayerConnection(player_id=player_id, role=normalized_role, websocket=websocket)
+    room.players[player_id] = player_conn
+
+    logger.info(f"🎮 Joueur [{player_id}] ({normalized_role}) connecté à la room [{room_code_upper}]. Total: {len(room.players)}")
+
+    # Envoi de confirmation initiale au client
+    await websocket.send_json({
+        "type": "CONNECTED",
+        "room_code": room_code_upper,
+        "player_id": player_id,
+        "role": normalized_role
+    })
 
     try:
         while True:
             data = await websocket.receive_json()
-            message = WSMessage(**data)
-            action = message.action
-            payload = message.payload or {}
 
-            room = get_room(room_code)
-            if not room:
-                await manager.send_personal_message(
-                    WSMessage(action=WSAction.ERROR, payload={"message": "Room not found"}),
-                    websocket
-                )
-                break
+            # Mise à jour continue des coordonnées GPS envoyées par l'application mobile
+            if "latitude" in data and "longitude" in data:
+                player_conn.latitude = float(data["latitude"])
+                player_conn.longitude = float(data["longitude"])
+                player_conn.last_updated = time.time()
 
-            # 1. JOIN ROOM EVENT
-            if action == WSAction.JOIN_ROOM:
-                player_name = payload.get("player_name", "Anonymous")
-                role = Role(payload.get("role", Role.CHASSE))
-
-                updated_room = join_room(room_code, player_id, player_name, role)
-
-                # Broadcast updated room state to all players
-                await manager.broadcast_to_room(
-                    room_code,
-                    WSMessage(
-                        action=WSAction.ROOM_STATE,
-                        payload=updated_room.model_dump()
-                    )
-                )
-
-            # 2. START GAME EVENT (Only Host)
-            elif action == WSAction.START_GAME:
-                player = room.players.get(player_id)
-                if not player or not player.is_host:
-                    await manager.send_personal_message(
-                        WSMessage(action=WSAction.ERROR, payload={"message": "Only host can start the game"}),
-                        websocket
-                    )
-                    continue
-
-                room.state = GameState.HEAD_START
-                room.start_time = time.time()
-
-                logger.info(f"Room {room_code}: Game started! Entering HEAD_START phase.")
-
-                await manager.broadcast_to_room(
-                    room_code,
-                    WSMessage(
-                        action=WSAction.GAME_STARTED,
-                        payload={
-                            "room_state": room.state,
-                            "head_start_duration": room.head_start_duration,
-                            "reveal_interval": room.reveal_interval
-                        }
-                    )
-                )
-
-            # 3. GPS LOCATION UPDATE EVENT (Received continuously from client background task)
-            elif action == WSAction.UPDATE_LOCATION:
-                lat = payload.get("latitude")
-                lng = payload.get("longitude")
-
-                if lat is not None and lng is not None:
-                    update_player_location(room_code, player_id, lat, lng)
-                    logger.debug(f"Room {room_code}: Updated location for player {player_id} ({lat}, {lng})")
-
-            # 4. PING / HEARTBEAT
-            elif action == WSAction.PING:
-                await manager.send_personal_message(
-                    WSMessage(action=WSAction.PONG, payload={"timestamp": time.time()}),
-                    websocket
-                )
+            elif data.get("type") == "PING":
+                await websocket.send_json({"type": "PONG", "timestamp": time.time()})
 
     except WebSocketDisconnect:
-        logger.info(f"Player {player_id} disconnected from room {room_code}")
-        manager.disconnect(room_code, player_id)
-        updated_room = remove_player(room_code, player_id)
-
-        if updated_room:
-            await manager.broadcast_to_room(
-                room_code,
-                WSMessage(
-                    action=WSAction.ROOM_STATE,
-                    payload=updated_room.model_dump()
-                )
-            )
+        logger.info(f"👋 Déconnexion du joueur [{player_id}] de la room [{room_code_upper}].")
     except Exception as e:
-        logger.error(f"WebSocket error for player {player_id} in room {room_code}: {e}")
-        manager.disconnect(room_code, player_id)
+        logger.error(f"Erreur WebSocket joueur [{player_id}] room [{room_code_upper}]: {e}")
+    finally:
+        # 5. GARBAGE COLLECTION : Nettoyage en mémoire RAM
+        if room_code_upper in ROOMS:
+            room = ROOMS[room_code_upper]
+            room.players.pop(player_id, None)
+
+            # Si plus aucun joueur n'est connecté, suppression définitive de la room
+            if len(room.players) == 0:
+                del ROOMS[room_code_upper]
+                logger.info(f"🧹 GARBAGE COLLECTION: La room [{room_code_upper}] est vide et a été définitivement supprimée de la RAM.")

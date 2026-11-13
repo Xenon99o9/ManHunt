@@ -11,13 +11,14 @@ export class GameWebSocket {
   constructor(
     private baseUrl: string,
     private roomCode: string,
-    private playerId: string
+    private playerId: string,
+    private role: string
   ) {}
 
   public connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.isIntentionalDisconnect = false;
-      const wsUrl = `${this.baseUrl}/ws/${this.roomCode}/${this.playerId}`;
+      const wsUrl = `${this.baseUrl}/ws/${this.roomCode}/${this.playerId}/${this.role.toLowerCase()}`;
       console.log(`[WebSocket] Connecting to ${wsUrl}...`);
 
       this.socket = new WebSocket(wsUrl);
