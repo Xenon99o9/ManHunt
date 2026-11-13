@@ -2,6 +2,8 @@ export type Role = 'CHASSEUR' | 'CHASSE';
 
 export type GameState = 'LOBBY' | 'HEAD_START' | 'HUNTING' | 'ENDED';
 
+export type RoleMode = 'FREE' | 'HOST' | 'RANDOM';
+
 export interface Location {
   latitude: number;
   longitude: number;
@@ -25,6 +27,8 @@ export interface Room {
   start_time?: number;
   head_start_duration: number;
   reveal_interval: number;
+  role_mode?: RoleMode;
+  max_hunters?: number;
 }
 
 export interface ChasseReveal {
@@ -44,6 +48,9 @@ export type WSAction =
   | 'GAME_STARTED'
   | 'TIMER_TICK'
   | 'LOCATION_REVEAL'
+  | 'HUNTED_POSITIONS_REVEAL'
+  | 'UPDATE_CONFIG'
+  | 'CHANGE_PLAYER_ROLE'
   | 'ERROR'
   | 'PONG'
   | 'PING';

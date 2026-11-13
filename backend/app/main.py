@@ -1,10 +1,11 @@
 import asyncio
 import logging
+import random
 import secrets
 import string
 import time
 from contextlib import asynccontextmanager
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -36,7 +37,17 @@ class Room:
         self.state: str = "LOBBY"
         self.created_at: float = time.time()
         self.start_time: Optional[float] = None
-        # Dictionnaire d'associativité : player_id -> PlayerConnection
+
+        # Options configurables par l'hôte
+        self.head_start_duration: int = 300  # 5 minutes de fuite
+        self.reveal_interval: int = 300      # 5 minutes par défaut entre chaque reveal (60s, 120s, 180s, 300s, 600s)
+        self.role_mode: str = "FREE"         # 'FREE' (libre), 'HOST' (par l'hôte), 'RANDOM' (aléatoire)
+        self.max_hunters: int = 1            # Utilisé pour le mode aléatoire
+
+        self.last_reveal_time: Optional[float] = None
+        self.next_reveal_time: Optional[float] = None
+
+        # Dictionnaire : player_id -> PlayerConnection
         self.players: Dict[str, PlayerConnection] = {}
 
 
@@ -75,8 +86,10 @@ def build_room_state_payload(room: Room) -> dict:
         "state": room.state,
         "created_at": room.created_at,
         "start_time": room.start_time,
-        "head_start_duration": 300,
-        "reveal_interval": 300,
+        "head_start_duration": room.head_start_duration,
+        "reveal_interval": room.reveal_interval,
+        "role_mode": room.role_mode,
+        "max_hunters": room.max_hunters,
         "players": players_dict
     }
 
@@ -96,76 +109,123 @@ async def broadcast_room_state(room_code: str):
                 pass
 
 
+async def broadcast_hunted_positions(room: Room):
+    """Extraction et envoi des coordonnées GPS des chassés aux chasseurs."""
+    current_time = time.time()
+    hunted_positions = []
+    for player in room.players.values():
+        if player.role == "chasse" and player.latitude is not None and player.longitude is not None:
+            hunted_positions.append({
+                "player_id": player.player_id,
+                "player_name": player.name,
+                "latitude": player.latitude,
+                "longitude": player.longitude,
+                "last_updated": player.last_updated
+            })
+
+    payload = {
+        "action": "HUNTED_POSITIONS_REVEAL",
+        "type": "HUNTED_POSITIONS_REVEAL",
+        "timestamp": current_time,
+        "hunted_count": len(hunted_positions),
+        "hunted_positions": hunted_positions,
+        "payload": {
+            "chasses": hunted_positions
+        }
+    }
+
+    hunted_sent_count = 0
+    for player in list(room.players.values()):
+        if player.role == "chasseur":
+            try:
+                await player.websocket.send_json(payload)
+                hunted_sent_count += 1
+            except Exception as e:
+                logger.warning(f"Erreur d'envoi WebSocket au chasseur {player.player_id}: {e}")
+
+    logger.info(f"Room [{room.code}] : Révélation de {len(hunted_positions)} position(s) transmise(s) à {hunted_sent_count} chasseur(s).")
+
+
 # ============================================================================
-# 4. FILTRAGE DE DIFFUSION (Boucle asynchrone 5 minutes)
+# 4. FILTRAGE ET TIMERS DE DIFFUSION (Boucle 1s)
 # ============================================================================
 
 async def location_broadcast_loop():
     """
-    Tâche d'arrière-plan autonome s'exécutant toutes les 5 minutes (300 secondes).
-    Récupère les positions GPS des 'chassés' de chaque room et les envoie
-    EXCLUSIVEMENT aux WebSockets des 'chasseurs' de la même room.
+    Tâche d'arrière-plan autonome s'exécutant chaque seconde.
+    - Met à jour les décomptes TIMER_TICK (1s).
+    - Déclenche le passage de HEAD_START -> HUNTING quand le chrono atteint 0.
+    - Déclenche la révélation des positions des chassés aux chasseurs selon l'intervalle choisi.
     """
-    logger.info("⚡ Démarrage de la boucle asynchrone de diffusion GPS (intervalle: 5 min).")
+    logger.info("⚡ Démarrage de la boucle asynchrone autonome (tick: 1s).")
     while True:
         try:
-            await asyncio.sleep(300)  # Attente de 5 minutes (300 secondes)
+            await asyncio.sleep(1)
             current_time = time.time()
 
-            # Parcours de toutes les rooms actives stockées en RAM
             for room_code, room in list(ROOMS.items()):
-                # 1. Extraction des coordonnées GPS actuelles des "chassés"
-                hunted_positions = []
-                for player in room.players.values():
-                    if player.role == "chasse" and player.latitude is not None and player.longitude is not None:
-                        hunted_positions.append({
-                            "player_id": player.player_id,
-                            "player_name": player.name,
-                            "latitude": player.latitude,
-                            "longitude": player.longitude,
-                            "last_updated": player.last_updated
-                        })
+                if room.state == "HEAD_START":
+                    elapsed = current_time - room.start_time
+                    remaining = max(0, int(room.head_start_duration - elapsed))
 
-                # 2. Construction du paquet JSON réservé aux chasseurs
-                payload = {
-                    "action": "HUNTED_POSITIONS_REVEAL",
-                    "type": "HUNTED_POSITIONS_REVEAL",
-                    "timestamp": current_time,
-                    "hunted_count": len(hunted_positions),
-                    "hunted_positions": hunted_positions,
-                    "payload": {
-                        "chasses": hunted_positions
+                    # Diffuser le tick d'une seconde
+                    tick_msg = {
+                        "action": "TIMER_TICK",
+                        "payload": {
+                            "phase": "HEAD_START",
+                            "remaining_seconds": remaining,
+                            "total_seconds": room.head_start_duration
+                        }
                     }
-                }
-
-                # 3. Diffusion EXCLUSIVE aux WebSockets des "chasseurs"
-                hunted_sent_count = 0
-                for player in list(room.players.values()):
-                    if player.role == "chasseur":
+                    for player in list(room.players.values()):
                         try:
-                            await player.websocket.send_json(payload)
-                            hunted_sent_count += 1
-                        except Exception as e:
-                            logger.warning(f"Erreur d'envoi WebSocket au chasseur {player.player_id}: {e}")
+                            await player.websocket.send_json(tick_msg)
+                        except Exception:
+                            pass
 
-                logger.info(
-                    f"Room [{room_code}] : Révélation de {len(hunted_positions)} position(s) de chassé(s) "
-                    f"transmise(s) à {hunted_sent_count} chasseur(s)."
-                )
+                    # Fin des 5 minutes de fuite -> passage en chasse active
+                    if remaining <= 0:
+                        room.state = "HUNTING"
+                        room.last_reveal_time = current_time
+                        room.next_reveal_time = current_time + room.reveal_interval
+                        logger.info(f"Room [{room_code}] : Fin du chrono de fuite. Début de la HUNTING phase !")
+
+                        await broadcast_hunted_positions(room)
+                        await broadcast_room_state(room_code)
+
+                elif room.state == "HUNTING":
+                    remaining_reveal = max(0, int(room.next_reveal_time - current_time))
+
+                    tick_msg = {
+                        "action": "TIMER_TICK",
+                        "payload": {
+                            "phase": "HUNTING",
+                            "remaining_seconds": remaining_reveal,
+                            "total_seconds": room.reveal_interval
+                        }
+                    }
+                    for player in list(room.players.values()):
+                        try:
+                            await player.websocket.send_json(tick_msg)
+                        except Exception:
+                            pass
+
+                    # Intervalle atteint -> Nouvelle révélation des positions
+                    if current_time >= room.next_reveal_time:
+                        await broadcast_hunted_positions(room)
+                        room.last_reveal_time = current_time
+                        room.next_reveal_time = current_time + room.reveal_interval
 
         except asyncio.CancelledError:
-            logger.info("Boucle de diffusion GPS interrompue.")
             break
         except Exception as e:
-            logger.error(f"Erreur dans la boucle de diffusion GPS: {e}", exc_info=True)
+            logger.error(f"Erreur dans la boucle de jeu: {e}", exc_info=True)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Démarrage de la tâche de fond asyncio
     broadcast_task = asyncio.create_task(location_broadcast_loop())
     yield
-    # Nettoyage à l'arrêt du serveur
     broadcast_task.cancel()
     try:
         await broadcast_task
@@ -189,14 +249,13 @@ app.add_middleware(
 )
 
 
-# Schemas Pydantic
 class LocationPayload(BaseModel):
     latitude: float
     longitude: float
 
 
 # ============================================================================
-# 2. CRÉATION DE ROOM SÉCURISÉE (Endpoint HTTP /create-game)
+# 2. CRÉATION DE ROOM SÉCURISÉE
 # ============================================================================
 
 @app.get("/")
@@ -211,10 +270,6 @@ def read_root():
 @app.post("/create-game", status_code=status.HTTP_201_CREATED)
 @app.get("/create-game", status_code=status.HTTP_201_CREATED)
 def create_game():
-    """
-    Génère et renvoie un code d'accès aléatoire et unique à 6 lettres majuscules (ex: 'AMONGU').
-    Instancie la room associée dans le dictionnaire global en RAM.
-    """
     room_code = generate_unique_room_code(length=6)
     new_room = Room(code=room_code)
     ROOMS[room_code] = new_room
@@ -229,7 +284,6 @@ def create_game():
 
 @app.post("/api/rooms/{room_code}/location")
 def update_location_http(room_code: str, player_id: str, payload: LocationPayload):
-    """Endpoint de secours HTTP pour mise à jour GPS en arrière-plan."""
     room_code_upper = room_code.upper()
     if room_code_upper not in ROOMS:
         raise HTTPException(status_code=404, detail="Room not found")
@@ -246,42 +300,31 @@ def update_location_http(room_code: str, player_id: str, payload: LocationPayloa
 
 
 # ============================================================================
-# 3. CONNEXION WEBSOCKET & 5. GARBAGE COLLECTION
+# 3. WEBSOCKET & ACTIONS DE JEU
 # ============================================================================
 
 @app.websocket("/ws/{room_code}/{player_id}/{role}")
 async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: str, role: str):
-    """
-    Endpoint WebSocket temps réel.
-    - Rejette la connexion si le room_code n'existe pas en RAM.
-    - Accepte la connexion et enregistre le joueur et ses coordonnées GPS.
-    - Diffuse immédiatement l'état de la room (ROOM_STATE).
-    - Supprime automatiquement la room (Garbage Collection) à la déconnexion du dernier joueur.
-    """
     room_code_upper = room_code.upper()
     normalized_role = role.lower()
 
-    # Validation du rôle
     if normalized_role not in ("chasseur", "chasse"):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid role. Must be 'chasseur' or 'chasse'")
         return
 
-    # 3. Validation de l'existence du room_code dans le dictionnaire RAM
     if room_code_upper not in ROOMS:
         logger.warning(f"⛔ Connexion WebSocket refusée. Code room inconnu : [{room_code_upper}]")
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Room code does not exist")
         return
 
-    # Connexion acceptée par le serveur
     await websocket.accept()
     room = ROOMS[room_code_upper]
 
     player_conn = PlayerConnection(player_id=player_id, role=normalized_role, websocket=websocket)
     room.players[player_id] = player_conn
 
-    logger.info(f"🎮 Joueur [{player_id}] ({normalized_role}) connecté à la room [{room_code_upper}]. Total: {len(room.players)}")
+    logger.info(f"🎮 Joueur [{player_id}] ({normalized_role}) connecté à [{room_code_upper}]. Total: {len(room.players)}")
 
-    # Envoi immédiat de l'état de la room au joueur et broadcast aux membres
     await broadcast_room_state(room_code_upper)
 
     try:
@@ -289,33 +332,71 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: st
             data = await websocket.receive_json()
             action = data.get("action") or data.get("type")
 
-            # Mettre à jour le pseudo du joueur s'il est reçu
             if action == "JOIN_ROOM":
                 payload = data.get("payload", {})
                 if "player_name" in payload:
                     player_conn.name = payload["player_name"]
                 await broadcast_room_state(room_code_upper)
 
+            # Mise à jour de la configuration de la partie par l'hôte
+            elif action == "UPDATE_CONFIG":
+                player = room.players.get(player_id)
+                player_ids = list(room.players.keys())
+                if player and player_ids and player_id == player_ids[0]:  # Verifier que c'est l'hôte
+                    payload = data.get("payload", {})
+                    if "reveal_interval" in payload:
+                        room.reveal_interval = int(payload["reveal_interval"])
+                    if "role_mode" in payload:
+                        room.role_mode = str(payload["role_mode"])
+                    if "max_hunters" in payload:
+                        room.max_hunters = int(payload["max_hunters"])
+                    await broadcast_room_state(room_code_upper)
+
+            # L'hôte modifie le rôle d'un joueur directement
+            elif action == "CHANGE_PLAYER_ROLE":
+                player = room.players.get(player_id)
+                player_ids = list(room.players.keys())
+                if player and player_ids and player_id == player_ids[0]:
+                    payload = data.get("payload", {})
+                    target_id = payload.get("target_id")
+                    new_role = payload.get("role", "").lower()
+                    if target_id in room.players and new_role in ("chasseur", "chasse"):
+                        room.players[target_id].role = new_role
+                        await broadcast_room_state(room_code_upper)
+
+            # Lancement de la partie
             elif action == "START_GAME":
-                room.state = "HEAD_START"
-                room.start_time = time.time()
+                player = room.players.get(player_id)
+                player_ids = list(room.players.keys())
+                if player and player_ids and player_id == player_ids[0]:
+                    # Attribution aléatoire si le mode RANDOM est activé
+                    if room.role_mode == "RANDOM":
+                        all_p_ids = list(room.players.keys())
+                        random.shuffle(all_p_ids)
+                        num_hunters = min(room.max_hunters, len(all_p_ids))
+                        for idx, p_id in enumerate(all_p_ids):
+                            if idx < num_hunters:
+                                room.players[p_id].role = "chasseur"
+                            else:
+                                room.players[p_id].role = "chasse"
 
-                # Broadcaster l'événement de démarrage
-                start_msg = {
-                    "action": "GAME_STARTED",
-                    "payload": {
-                        "head_start_duration": 300,
-                        "reveal_interval": 300
+                    room.state = "HEAD_START"
+                    room.start_time = time.time()
+
+                    start_msg = {
+                        "action": "GAME_STARTED",
+                        "payload": {
+                            "head_start_duration": room.head_start_duration,
+                            "reveal_interval": room.reveal_interval
+                        }
                     }
-                }
-                for p in list(room.players.values()):
-                    try:
-                        await p.websocket.send_json(start_msg)
-                    except Exception:
-                        pass
-                await broadcast_room_state(room_code_upper)
+                    for p in list(room.players.values()):
+                        try:
+                            await p.websocket.send_json(start_msg)
+                        except Exception:
+                            pass
+                    await broadcast_room_state(room_code_upper)
 
-            # Mise à jour continue des coordonnées GPS envoyées par l'application mobile
             elif "latitude" in data and "longitude" in data:
                 player_conn.latitude = float(data["latitude"])
                 player_conn.longitude = float(data["longitude"])
@@ -325,18 +406,16 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: st
                 await websocket.send_json({"type": "PONG", "timestamp": time.time()})
 
     except WebSocketDisconnect:
-        logger.info(f"👋 Déconnexion du joueur [{player_id}] de la room [{room_code_upper}].")
+        logger.info(f"👋 Déconnexion de [{player_id}] de [{room_code_upper}].")
     except Exception as e:
-        logger.error(f"Erreur WebSocket joueur [{player_id}] room [{room_code_upper}]: {e}")
+        logger.error(f"Erreur WebSocket [{player_id}] room [{room_code_upper}]: {e}")
     finally:
-        # 5. GARBAGE COLLECTION : Nettoyage en mémoire RAM
         if room_code_upper in ROOMS:
             room = ROOMS[room_code_upper]
             room.players.pop(player_id, None)
 
-            # Si plus aucun joueur n'est connecté, suppression définitive de la room
             if len(room.players) == 0:
                 del ROOMS[room_code_upper]
-                logger.info(f"🧹 GARBAGE COLLECTION: La room [{room_code_upper}] est vide et a été définitivement supprimée de la RAM.")
+                logger.info(f"🧹 GARBAGE COLLECTION: [{room_code_upper}] supprimée de la RAM.")
             else:
                 await broadcast_room_state(room_code_upper)

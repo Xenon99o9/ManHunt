@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Room, Role, ChasseReveal } from '../types/game';
+import { Room, Role, ChasseReveal, RoleMode } from '../types/game';
 import { GameWebSocket } from '../services/websocket';
 import { startBackgroundLocationUpdates, stopBackgroundLocationUpdates } from '../services/backgroundLocation';
 
@@ -23,6 +23,8 @@ interface GameContextType {
   createRoom: (hostName: string, role: Role) => Promise<string>;
   joinRoom: (roomCode: string, name: string, role: Role) => Promise<void>;
   startGame: () => void;
+  updateRoomConfig: (config: { reveal_interval?: number; role_mode?: RoleMode; max_hunters?: number }) => void;
+  changePlayerRole: (targetId: string, newRole: Role) => void;
   disconnect: () => void;
 }
 
@@ -109,6 +111,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     switch (action) {
       case 'ROOM_STATE':
         setRoom(msg.payload);
+        if (msg.payload?.players && msg.payload.players[playerId]) {
+          setRole(msg.payload.players[playerId].role);
+        }
         if (msg.payload?.state && msg.payload.state !== 'LOBBY') {
           setTimerPhase(msg.payload.state);
         }
@@ -210,6 +215,24 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const updateRoomConfig = (config: { reveal_interval?: number; role_mode?: RoleMode; max_hunters?: number }) => {
+    if (wsRef.current) {
+      wsRef.current.send({
+        action: 'UPDATE_CONFIG',
+        payload: config,
+      });
+    }
+  };
+
+  const changePlayerRole = (targetId: string, newRole: Role) => {
+    if (wsRef.current) {
+      wsRef.current.send({
+        action: 'CHANGE_PLAYER_ROLE',
+        payload: { target_id: targetId, role: newRole },
+      });
+    }
+  };
+
   const disconnect = () => {
     stopBackgroundLocationUpdates();
     if (wsRef.current) {
@@ -247,6 +270,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         createRoom,
         joinRoom,
         startGame,
+        updateRoomConfig,
+        changePlayerRole,
         disconnect,
       }}
     >

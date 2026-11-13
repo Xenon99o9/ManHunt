@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useGame } from '../context/GameContext';
+import { RoleMode, Role } from '../types/game';
 
 export const LobbyScreen: React.FC = () => {
   const {
@@ -25,6 +26,8 @@ export const LobbyScreen: React.FC = () => {
     createRoom,
     joinRoom,
     startGame,
+    updateRoomConfig,
+    changePlayerRole,
   } = useGame();
 
   const [inputCode, setInputCode] = useState('');
@@ -69,6 +72,9 @@ export const LobbyScreen: React.FC = () => {
   };
 
   const isHost = room?.players[playerId]?.is_host;
+  const currentRoleMode = room?.role_mode || 'FREE';
+  const currentRevealInterval = room?.reveal_interval || 300;
+  const currentMaxHunters = room?.max_hunters || 1;
 
   // ÉCRAN LOBBY EN ATTENTE DANS UNE ROOM
   if (room) {
@@ -78,6 +84,72 @@ export const LobbyScreen: React.FC = () => {
         <Text style={styles.headerTitle}>ROOM: {room.code}</Text>
         <Text style={styles.subTitle}>Joueurs connectés ({playersList.length})</Text>
 
+        {/* Panneau d'options pour l'hôte */}
+        {isHost && (
+          <View style={styles.hostConfigPanel}>
+            <Text style={styles.configPanelTitle}>PARAMÈTRES DE JEU (HÔTE)</Text>
+
+            {/* Mode d'attribution des rôles */}
+            <Text style={styles.configLabel}>Attribution des Rôles :</Text>
+            <View style={styles.modeRow}>
+              {(['FREE', 'HOST', 'RANDOM'] as RoleMode[]).map((m) => (
+                <TouchableOpacity
+                  key={m}
+                  style={[styles.modeChip, currentRoleMode === m && styles.modeChipActive]}
+                  onPress={() => updateRoomConfig({ role_mode: m })}
+                >
+                  <Text style={[styles.modeChipText, currentRoleMode === m && styles.modeChipTextActive]}>
+                    {m === 'FREE' ? 'Libre' : m === 'HOST' ? 'Par Hôte' : 'Aléatoire'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Intervalle de géolocalisation */}
+            <Text style={styles.configLabel}>Envoi GPS toutes les :</Text>
+            <View style={styles.modeRow}>
+              {[
+                { sec: 60, label: '1 min' },
+                { sec: 120, label: '2 min' },
+                { sec: 180, label: '3 min' },
+                { sec: 300, label: '5 min' },
+                { sec: 600, label: '10 min' },
+              ].map((item) => (
+                <TouchableOpacity
+                  key={item.sec}
+                  style={[styles.modeChip, currentRevealInterval === item.sec && styles.modeChipActive]}
+                  onPress={() => updateRoomConfig({ reveal_interval: item.sec })}
+                >
+                  <Text style={[styles.modeChipText, currentRevealInterval === item.sec && styles.modeChipTextActive]}>
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Nb Max Chasseurs pour mode aléatoire */}
+            {currentRoleMode === 'RANDOM' && (
+              <View style={styles.randomConfigRow}>
+                <Text style={styles.configLabel}>Nb Max Chasseurs : {currentMaxHunters}</Text>
+                <View style={styles.counterRow}>
+                  <TouchableOpacity
+                    style={styles.counterButton}
+                    onPress={() => updateRoomConfig({ max_hunters: Math.max(1, currentMaxHunters - 1) })}
+                  >
+                    <Text style={styles.counterButtonText}>-</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.counterButton}
+                    onPress={() => updateRoomConfig({ max_hunters: currentMaxHunters + 1 })}
+                  >
+                    <Text style={styles.counterButtonText}>+</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+        )}
+
         <ScrollView style={styles.playerList}>
           {playersList.map((p) => (
             <View key={p.id} style={styles.playerCard}>
@@ -85,16 +157,34 @@ export const LobbyScreen: React.FC = () => {
                 {p.name} {p.is_host ? '👑 (Hôte)' : ''}
               </Text>
 
-              <View
-                style={[
-                  styles.roleBadge,
-                  p.role === 'CHASSEUR' ? styles.hunterBadge : styles.huntedBadge,
-                ]}
-              >
-                <Text style={styles.roleBadgeText}>
-                  {p.role === 'CHASSEUR' ? 'CHASSEUR' : 'CHASSÉ'}
-                </Text>
-              </View>
+              {/* Si l'hôte peut changer les rôles direct */}
+              {isHost && currentRoleMode === 'HOST' ? (
+                <TouchableOpacity
+                  style={[
+                    styles.roleBadge,
+                    p.role === 'CHASSEUR' ? styles.hunterBadge : styles.huntedBadge,
+                  ]}
+                  onPress={() => {
+                    const newRole: Role = p.role === 'CHASSEUR' ? 'CHASSE' : 'CHASSEUR';
+                    changePlayerRole(p.id, newRole);
+                  }}
+                >
+                  <Text style={styles.roleBadgeText}>
+                    {p.role === 'CHASSEUR' ? 'CHASSEUR (Changer)' : 'CHASSÉ (Changer)'}
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <View
+                  style={[
+                    styles.roleBadge,
+                    p.role === 'CHASSEUR' ? styles.hunterBadge : styles.huntedBadge,
+                  ]}
+                >
+                  <Text style={styles.roleBadgeText}>
+                    {p.role === 'CHASSEUR' ? 'CHASSEUR' : 'CHASSÉ'}
+                  </Text>
+                </View>
+              )}
             </View>
           ))}
         </ScrollView>
@@ -245,7 +335,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#8A8A9E',
     textAlign: 'center',
-    marginBottom: 24,
+    marginBottom: 20,
   },
   fieldGroup: {
     marginBottom: 20,
@@ -329,7 +419,7 @@ const styles = StyleSheet.create({
   },
   playerList: {
     flex: 1,
-    marginVertical: 16,
+    marginVertical: 10,
   },
   playerCard: {
     flexDirection: 'row',
@@ -347,7 +437,7 @@ const styles = StyleSheet.create({
   },
   roleBadge: {
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: 6,
     borderRadius: 8,
   },
   hunterBadge: {
@@ -414,5 +504,76 @@ const styles = StyleSheet.create({
   },
   historyChipTextActive: {
     color: '#4DEEEA',
+  },
+  hostConfigPanel: {
+    backgroundColor: '#1E1E2C',
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#3A3A55',
+  },
+  configPanelTitle: {
+    color: '#FFDD57',
+    fontWeight: 'bold',
+    fontSize: 12,
+    letterSpacing: 1,
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  configLabel: {
+    color: '#E0E0E0',
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  modeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 6,
+  },
+  modeChip: {
+    backgroundColor: '#2A2A3D',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginRight: 6,
+    marginBottom: 6,
+  },
+  modeChipActive: {
+    backgroundColor: '#FFDD57',
+  },
+  modeChipText: {
+    color: '#A0A0B0',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  modeChipTextActive: {
+    color: '#12121C',
+  },
+  randomConfigRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  counterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  counterButton: {
+    backgroundColor: '#3A3A55',
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 6,
+  },
+  counterButtonText: {
+    color: '#FFF',
+    fontWeight: 'bold',
+    fontSize: 18,
   },
 });

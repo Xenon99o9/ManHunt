@@ -16,19 +16,19 @@ export const MapViewComponent: React.FC<Props> = ({
   myLocation,
   chasseReveals,
 }) => {
-  // Masquage de la carte pour les chasseurs pendant la période de fuite
+  // Masquage de la carte pour les chasseurs pendant la période de fuite (HEAD_START)
   if (role === 'CHASSEUR' && gameState === 'HEAD_START') {
     return (
       <View style={styles.lockedContainer}>
         <Text style={styles.lockedTitle}>CARTE VERROUILLÉE</Text>
         <Text style={styles.lockedSub}>
-          Les chassés s'enfuient ! Vous aurez accès à la carte dans 5 minutes.
+          Les chassés s'enfuient ! Vous aurez accès à la carte dès la fin du compte à rebours.
         </Text>
       </View>
     );
   }
 
-  // Position de départ par défaut (ex: Paris si pas encore de GPS)
+  // Position de départ par défaut (Paris si pas encore de GPS)
   const initialRegion = {
     latitude: myLocation?.latitude || 48.8566,
     longitude: myLocation?.longitude || 2.3522,
@@ -38,14 +38,13 @@ export const MapViewComponent: React.FC<Props> = ({
 
   return (
     <View style={styles.container}>
-      {/* Utilisation de la carte native intégrée sans aucune clé API Google */}
       <MapView
         style={styles.map}
         initialRegion={initialRegion}
-        showsUserLocation={true}
-        showsMyLocationButton={true}
+        showsUserLocation={false}
+        showsMyLocationButton={false}
       >
-        {/* Vue Chasseur : Marqueurs des chassés révélés toutes les 5 min */}
+        {/* Vue Chasseur : Marqueurs des chassés révélés par le serveur */}
         {role === 'CHASSEUR' &&
           chasseReveals.map((chasse) => (
             <Marker
@@ -60,15 +59,15 @@ export const MapViewComponent: React.FC<Props> = ({
             />
           ))}
 
-        {/* Vue Chassé : Marqueur de sa propre position */}
-        {role === 'CHASSE' && myLocation && (
+        {/* Vue Chassé ou marqueur personnel */}
+        {myLocation && (
           <Marker
             coordinate={{
               latitude: myLocation.latitude,
               longitude: myLocation.longitude,
             }}
-            title="Ma position (Chassé)"
-            pinColor="#34C759"
+            title={role === 'CHASSE' ? 'Ma position (Chassé)' : 'Ma position (Chasseur)'}
+            pinColor={role === 'CHASSE' ? '#34C759' : '#007AFF'}
           />
         )}
       </MapView>
