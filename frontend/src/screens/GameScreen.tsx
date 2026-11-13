@@ -1,8 +1,45 @@
-import React from 'react';
+import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useGame } from '../context/GameContext';
 import { TimerDisplay } from '../components/TimerDisplay';
 import { MapViewComponent } from '../components/MapViewComponent';
+
+interface ErrorBoundaryProps {
+  children: ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+}
+
+class MapErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(_: Error): ErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.warn('[MapErrorBoundary] Map Component Error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorTitle}>CHARGEMENT DE LA CARTE</Text>
+          <Text style={styles.errorSub}>
+            Affichage des coordonnées en cours d'initialisation...
+          </Text>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export const GameScreen: React.FC = () => {
   const {
@@ -35,18 +72,20 @@ export const GameScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* 5-minute Timer Display */}
+        {/* Chronomètre dynamique */}
         <TimerDisplay seconds={timerSeconds} phase={timerPhase} />
       </View>
 
-      {/* Interactive Map View */}
+      {/* Vue de Carte sécurisée par un ErrorBoundary anti-crash */}
       <View style={styles.mapContainer}>
-        <MapViewComponent
-          role={role}
-          gameState={room.state}
-          myLocation={myLocation}
-          chasseReveals={chasseReveals}
-        />
+        <MapErrorBoundary>
+          <MapViewComponent
+            role={role}
+            gameState={room.state}
+            myLocation={myLocation}
+            chasseReveals={chasseReveals}
+          />
+        </MapErrorBoundary>
       </View>
 
       {/* Footer controls */}
@@ -117,5 +156,26 @@ const styles = StyleSheet.create({
     color: '#FF3B30',
     fontWeight: 'bold',
     fontSize: 14,
+  },
+  errorContainer: {
+    flex: 1,
+    backgroundColor: '#1E1E2C',
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#3A3A55',
+  },
+  errorTitle: {
+    color: '#FFDD57',
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 6,
+  },
+  errorSub: {
+    color: '#A0A0B0',
+    fontSize: 13,
+    textAlign: 'center',
   },
 });

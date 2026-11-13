@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import { Role, GameState, ChasseReveal } from '../types/game';
@@ -10,12 +10,21 @@ interface Props {
   chasseReveals: ChasseReveal[];
 }
 
+// Region initiale statique IMMUTABLE (référence constante pour empêcher la ré-instanciation native C++)
+const STATIC_INITIAL_REGION = {
+  latitude: 48.8566,
+  longitude: 2.3522,
+  latitudeDelta: 0.015,
+  longitudeDelta: 0.015,
+};
+
 export const MapViewComponent: React.FC<Props> = ({
   role,
   gameState,
   myLocation,
   chasseReveals,
 }) => {
+  const mapRef = useRef<MapView | null>(null);
   const [isMapReady, setIsMapReady] = useState(false);
 
   // Verification securisée de la position GPS initiale
@@ -26,14 +35,26 @@ export const MapViewComponent: React.FC<Props> = ({
     !isNaN(myLocation.latitude) &&
     !isNaN(myLocation.longitude);
 
-  const initialRegion = {
-    latitude: hasValidMyLocation ? myLocation!.latitude : 48.8566,
-    longitude: hasValidMyLocation ? myLocation!.longitude : 2.3522,
-    latitudeDelta: 0.015,
-    longitudeDelta: 0.015,
-  };
+  // Animer la caméra de manière ultra-sécurisée uniquement si la carte native est prête
+  useEffect(() => {
+    if (isMapReady && hasValidMyLocation && mapRef.current) {
+      try {
+        mapRef.current.animateToRegion(
+          {
+            latitude: myLocation!.latitude,
+            longitude: myLocation!.longitude,
+            latitudeDelta: 0.015,
+            longitudeDelta: 0.015,
+          },
+          1000
+        );
+      } catch (err) {
+        console.warn('[MapViewComponent] animateToRegion warning:', err);
+      }
+    }
+  }, [hasValidMyLocation, myLocation?.latitude, myLocation?.longitude, isMapReady]);
 
-  // Filtrage ultra-sécurisé des marqueurs de chassés (évite tout crash JS ou C++ Android Native)
+  // Filtrage ultra-sécurisé des marqueurs de chassés
   const validChasseReveals = (chasseReveals || []).filter(
     (chasse) =>
       chasse &&
@@ -47,10 +68,11 @@ export const MapViewComponent: React.FC<Props> = ({
 
   return (
     <View style={styles.container}>
-      {/* Toujours maintenir le MapView monté pour éviter les cycles d'instanciation C++ natifs */}
+      {/* Utilisation d'une région statique immuable pour bloquer tout crash de ré-instanciation native */}
       <MapView
+        ref={mapRef}
         style={styles.map}
-        initialRegion={initialRegion}
+        initialRegion={STATIC_INITIAL_REGION}
         showsUserLocation={false}
         showsMyLocationButton={false}
         onMapReady={() => setIsMapReady(true)}
