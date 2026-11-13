@@ -19,11 +19,13 @@
       "bundleIdentifier": "com.manhunt.app",
       "infoPlist": {
         "UIBackgroundModes": [
+          "location",
           "location"
         ],
         "NSLocationWhenInUseUsageDescription": "ManHunt a besoin de votre géolocalisation pour transmettre votre position aux chasseurs.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "ManHunt transmet votre position GPS en arrière-plan pendant la partie, même lorsque l'écran est verrouillé.",
-        "NSLocationAlwaysUsageDescription": "ManHunt a besoin de la géolocalisation en arrière-plan pour le bon fonctionnement du jeu de cache-cache."
+        "NSLocationAlwaysUsageDescription": "ManHunt a besoin de la géolocalisation en arrière-plan pour le bon fonctionnement du jeu de cache-cache.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
