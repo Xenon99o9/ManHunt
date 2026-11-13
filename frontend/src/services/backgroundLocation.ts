@@ -42,19 +42,19 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
 
       // HTTP Direct Fallback / Sync Endpoint to guarantee delivery if WebSocket drops in background
       try {
-        const httpUrl = activeConfig.serverUrl.replace(/^ws/, 'http');
-        // Sending position update via HTTP endpoint or active WS connection
-        await fetch(`${httpUrl}/api/rooms/${activeConfig.roomCode}/location`, {
+        let httpUrl = activeConfig.serverUrl.trim().replace(/\/+$/, '');
+        if (httpUrl.startsWith('wss://')) httpUrl = httpUrl.replace(/^wss:\/\//, 'https://');
+        else if (httpUrl.startsWith('ws://')) httpUrl = httpUrl.replace(/^ws:\/\//, 'http://');
+        else if (!httpUrl.startsWith('http://') && !httpUrl.startsWith('https://')) httpUrl = `https://${httpUrl}`;
+
+        await fetch(`${httpUrl}/api/rooms/${activeConfig.roomCode}/location?player_id=${activeConfig.playerId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            player_id: activeConfig.playerId,
             latitude,
             longitude,
           }),
-        }).catch(() => {
-          // Silent ignore if offline or background network throttling occurs
-        });
+        }).catch(() => {});
       } catch (err) {
         console.warn('[BackgroundLocation] Failed sending background location HTTP sync:', err);
       }

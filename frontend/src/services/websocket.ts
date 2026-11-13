@@ -18,7 +18,16 @@ export class GameWebSocket {
   public connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.isIntentionalDisconnect = false;
-      const wsUrl = `${this.baseUrl}/ws/${this.roomCode}/${this.playerId}/${this.role.toLowerCase()}`;
+      let cleanedUrl = this.baseUrl.trim().replace(/\/+$/, '');
+      if (cleanedUrl.startsWith('https://')) {
+        cleanedUrl = cleanedUrl.replace(/^https:\/\//, 'wss://');
+      } else if (cleanedUrl.startsWith('http://')) {
+        cleanedUrl = cleanedUrl.replace(/^http:\/\//, 'ws://');
+      } else if (!cleanedUrl.startsWith('ws://') && !cleanedUrl.startsWith('wss://')) {
+        cleanedUrl = `wss://${cleanedUrl}`;
+      }
+
+      const wsUrl = `${cleanedUrl}/ws/${this.roomCode}/${this.playerId}/${this.role.toLowerCase()}`;
       console.log(`[WebSocket] Connecting to ${wsUrl}...`);
 
       this.socket = new WebSocket(wsUrl);

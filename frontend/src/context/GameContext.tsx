@@ -25,7 +25,7 @@ interface GameContextType {
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
 
-const DEFAULT_SERVER_URL = 'ws://localhost:8000'; // Default server URL (can be changed in app UI)
+const DEFAULT_SERVER_URL = ''; // Pas d'URL en dur par défaut pour préserver la confidentialité
 
 export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [serverUrl, setServerUrl] = useState<string>(DEFAULT_SERVER_URL);
@@ -73,10 +73,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         alert(`Erreur: ${msg.payload?.message || msg.reason}`);
         break;
     }
+  const getCleanHttpUrl = (rawUrl: string): string => {
+    let url = rawUrl.trim().replace(/\/+$/, '');
+    if (url.startsWith('wss://')) return url.replace(/^wss:\/\//, 'https://');
+    if (url.startsWith('ws://')) return url.replace(/^ws:\/\//, 'http://');
+    if (!url.startsWith('http://') && !url.startsWith('https://')) return `https://${url}`;
+    return url;
   };
 
   const createRoom = async (name: string, selectedRole: Role): Promise<string> => {
-    const httpUrl = serverUrl.replace(/^ws/, 'http');
+    const httpUrl = getCleanHttpUrl(serverUrl);
     const res = await fetch(`${httpUrl}/create-game`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

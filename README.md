@@ -8,25 +8,30 @@
 
 ---
 
-## 📦 Téléchargements & Releases (v1.0.0)
+## 📲 Téléchargements & Releases
 
-[![Release v1.0.0](https://img.shields.io/badge/Release-v1.0.0-blue.svg)](../../releases/tag/v1.0.0)
-[![Android Build](https://img.shields.io/badge/Android-APK_v1.0.0-green.svg)](../../releases/download/v1.0.0/ManHunt-v1.0.0.apk)
-[![iOS Build](https://img.shields.io/badge/iOS-IPA_TestFlight-lightgrey.svg)](../../releases/tag/v1.0.0)
+| Plateforme | Version | Fichier d'installation |
+| :--- | :--- | :--- |
+| **Android** | `v1.0.0` | [Télécharger ManHunt-v1.0.0.apk](../../releases/download/v1.0.0/ManHunt-v1.0.0.apk) |
+| **iOS** | `v1.0.0` | [Voir la Release v1.0.0 (TestFlight / IPA)](../../releases/tag/v1.0.0) |
 
-Les exécutables pré-générés pour mobile sont disponibles directement dans la section **[GitHub Releases v1.0.0](../../releases/tag/v1.0.0)** :
+> 📌 **Note d'installation Android :** Si vous téléchargez le fichier APK directement sur votre téléphone, autorisez l'installation d'applications issues de sources inconnues dans les paramètres de votre navigateur mobile.
 
-- **Android (APK) :** Téléchargez et installez directement [ManHunt-v1.0.0.apk](../../releases/download/v1.0.0/ManHunt-v1.0.0.apk) sur votre smartphone.
-- **iOS (IPA / TestFlight) :** Disponible via la build EAS Expo ou fichier `.ipa` dans les assets de la release.
+---
 
-### Générer les builds APK / iOS vous-même (Expo EAS) :
+## 🛠️ Générer les exécutions (Build Expo EAS)
+
+Si vous souhaitez builder vous-même le fichier `.apk` pour Android ou `.ipa` pour iOS :
+
 ```bash
-# Générer l'APK Android pour distribution directe
+# 1. Se positionner dans le dossier frontend
 cd frontend
+
+# 2. Builder l'APK Android (Preview Distribution)
 npx eas-cli build --platform android --profile preview
 
-# Créer la Release Git v1.0.0
-git tag -a v1.0.0 -m "Release initiale ManHunt v1.0.0"
+# 3. Tag de version Git v1.0.0
+git tag -a v1.0.0 -m "Version v1.0.0 - Release initiale"
 git push origin v1.0.0
 ```
 
@@ -47,15 +52,15 @@ git push origin v1.0.0
 
 ---
 
-## 🛠️ Architecture Technique
+## 🏗️ Architecture Technique
 
 - **Backend (Python 3.11 / FastAPI) :**
-  - **Stockage 100% RAM :** Aucune base de données SQL/NoSQL. Toutes les rooms et positions sont stockées dans un dictionnaire Python en mémoire vive.
-  - **Communication temps réel :** WebSockets natifs avec gestionnaires de reconnexion auto et pings de maintien.
-  - **Boucle de jeu asynchrone (`asyncio`) :** Tâche d'arrière-plan autonome gérant l'intervalle de 5 minutes.
+  - **Stockage 100% RAM :** Aucune base de données. Toutes les rooms et positions sont stockées dans un dictionnaire Python en mémoire vive.
+  - **Communication temps réel :** WebSockets natifs avec pings de maintien et reconnexion automatique.
+  - **Boucle de jeu asynchrone (`asyncio`) :** Tâche d'arrière-plan autonome s'exécutant toutes les 5 minutes.
 - **Frontend (React Native / Expo / TypeScript) :**
   - **Cartographie :** `react-native-maps` (Google Maps).
-  - **GPS Arrière-plan :** `expo-location` et `TaskManager` configurés pour fonctionner avec l'écran verrouillé.
+  - **GPS Arrière-plan :** `expo-location` et `TaskManager` configurés pour fonctionner écran verrouillé.
 
 ---
 
@@ -95,7 +100,15 @@ npx expo start
 
 ## 🌐 Guide de Déploiement Backend
 
-### Option A : Déploiement sur Serveur Loué (VPS / GCP / Hetzner / OVH)
+### Option A : Déploiement Gratuit sur Render.com
+
+1. Créez un **Web Service** sur Render.com et connectez votre dépôt GitHub `manHunt`.
+2. Sélectionnez le Runtime **Docker** (détecte automatiquement le `Dockerfile`).
+3. Dans l'application mobile Expo, renseignez l'URL générée par Render (ex: `https://votre-app.onrender.com`).
+
+---
+
+### Option B : Déploiement sur Serveur Loué (VPS / GCP / Hetzner / OVH)
 
 ```bash
 # 1. Installer Docker sur le serveur Linux
@@ -110,18 +123,6 @@ docker build -t manhunt-backend .
 # 3. Exécuter en arrière-plan
 docker run -d --name manhunt-server -p 8000:8000 --restart always manhunt-backend
 ```
-Dans l'application mobile, renseignez : `ws://<IP_DE_VOTRE_SERVEUR>:8000`
-
----
-
-### Option B : Déploiement Gratuit sur Render.com
-
-1. Créez un **Web Service** sur Render.com et connectez votre dépôt GitHub `manHunt`.
-2. Sélectionnez le Runtime **Docker** (détecte automatiquement le `Dockerfile`).
-3. Dans l'application mobile Expo, renseignez l'URL sécurisée générée par Render :
-   ```text
-   wss://votre-app.onrender.com
-   ```
 
 ---
 
@@ -129,7 +130,7 @@ Dans l'application mobile, renseignez : `ws://<IP_DE_VOTRE_SERVEUR>:8000`
 
 ```text
 manHunt/
-├── README.md                  # Documentation du projet
+├── README.md                  # Documentation du projet et liens de téléchargement
 ├── .gitignore                 # Exclusion des fichiers temporaires/sensibles
 ├── backend/
 │   ├── Dockerfile             # Configuration Docker pour déploiement
