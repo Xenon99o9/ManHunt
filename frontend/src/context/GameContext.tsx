@@ -50,6 +50,19 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const wsRef = useRef<GameWebSocket | null>(null);
 
+  // Décompte local du chronomètre chaque seconde
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    if (timerPhase !== 'LOBBY' && timerSeconds > 0) {
+      interval = setInterval(() => {
+        setTimerSeconds((prev) => Math.max(0, prev - 1));
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [timerPhase, timerSeconds > 0]);
+
   // Charger automatiquement l'URL active et l'historique des serveurs au démarrage
   useEffect(() => {
     Promise.all([
@@ -77,7 +90,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const clean = url.trim();
     setServerHistory((prev) => {
       const filtered = prev.filter((item) => item !== clean);
-      const updated = [clean, ...filtered].slice(0, 5); // Conserver les 5 derniers serveurs uniques
+      const updated = [clean, ...filtered].slice(0, 5);
       AsyncStorage.setItem(STORAGE_KEY_SERVER_HISTORY, JSON.stringify(updated)).catch(() => {});
       return updated;
     });
@@ -96,6 +109,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     switch (action) {
       case 'ROOM_STATE':
         setRoom(msg.payload);
+        if (msg.payload?.state && msg.payload.state !== 'LOBBY') {
+          setTimerPhase(msg.payload.state);
+        }
         break;
 
       case 'GAME_STARTED':
@@ -105,9 +121,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         break;
 
       case 'TIMER_TICK':
-        setTimerPhase(msg.payload.phase);
-        setTimerSeconds(msg.payload.remaining_seconds);
-        setTimerTotal(msg.payload.total_seconds);
+        if (msg.payload) {
+          setTimerPhase(msg.payload.phase);
+          setTimerSeconds(msg.payload.remaining_seconds);
+          setTimerTotal(msg.payload.total_seconds);
+        }
         break;
 
       case 'LOCATION_REVEAL':
@@ -173,13 +191,17 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       payload: { player_name: name, role: selectedRole },
     });
 
-    await startBackgroundLocationUpdates(roomCode, playerId, serverUrl, (lat, lng) => {
-      setMyLocation({ latitude: lat, longitude: lng });
-      ws.send({
-        action: 'UPDATE_LOCATION',
-        payload: { latitude: lat, longitude: lng },
+    try {
+      await startBackgroundLocationUpdates(roomCode, playerId, serverUrl, (lat, lng) => {
+        setMyLocation({ latitude: lat, longitude: lng });
+        ws.send({
+          action: 'UPDATE_LOCATION',
+          payload: { latitude: lat, longitude: lng },
+        });
       });
-    });
+    } catch (err) {
+      console.warn('[GameContext] GPS setup warning:', err);
+    }
   };
 
   const startGame = () => {

@@ -1,15 +1,17 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
+import { Platform } from 'react-native';
 
 export const LOCATION_TASK_NAME = 'BACKGROUND_MANHUNT_LOCATION_TASK';
 
-// Shared state for background task to know active target server & credentials
 let activeConfig: {
   roomCode: string;
   playerId: string;
   serverUrl: string;
   onLocationUpdate?: (lat: number, lng: number) => void;
 } | null = null;
+
+let foregroundSubscription: Location.LocationSubscription | null = null;
 
 export const setBackgroundLocationConfig = (
   roomCode: string,
@@ -20,7 +22,7 @@ export const setBackgroundLocationConfig = (
   activeConfig = { roomCode, playerId, serverUrl, onLocationUpdate };
 };
 
-// 1. TOP-LEVEL TaskManager Task Definition (Required by Expo)
+// 1. Définition impérativement au premier niveau de fichier (scope global)
 TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
   if (error) {
     console.error('[BackgroundLocation] TaskManager error:', error.message);
@@ -33,14 +35,13 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
 
     if (latestLocation && activeConfig) {
       const { latitude, longitude } = latestLocation.coords;
-      console.log(`[BackgroundLocation] GPS Ping in background: ${latitude}, ${longitude}`);
+      console.log(`[BackgroundLocation] GPS arrière-plan: ${latitude}, ${longitude}`);
 
-      // Notify in-app state if callback registered
       if (activeConfig.onLocationUpdate) {
         activeConfig.onLocationUpdate(latitude, longitude);
       }
 
-      // HTTP Direct Fallback / Sync Endpoint to guarantee delivery if WebSocket drops in background
+      // Envoi synchrone de secours en HTTP
       try {
         let httpUrl = activeConfig.serverUrl.trim().replace(/\/+$/, '');
         if (httpUrl.startsWith('wss://')) httpUrl = httpUrl.replace(/^wss:\/\//, 'https://');
@@ -62,69 +63,102 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
   }
 });
 
-// 2. Permission Request Function
-export async function requestLocationPermissions(): Promise<boolean> {
-  // Request Foreground permission
-  const { status: foregroundStatus } = await Location.requestForegroundPermissionsAsync();
-  if (foregroundStatus !== 'granted') {
-    console.warn('[Location] Foreground permission denied');
-    return false;
-  }
+export async function requestLocationPermissions(): Promise<{ foreground: boolean; background: boolean }> {
+  try {
+    const { status: fg } = await Location.requestForegroundPermissionsAsync();
+    if (fg !== 'granted') {
+      return { foreground: false, background: false };
+    }
 
-  // Request Background permission
-  const { status: backgroundStatus } = await Location.requestBackgroundPermissionsAsync();
-  if (backgroundStatus !== 'granted') {
-    console.warn('[Location] Background permission denied');
-    return false;
+    const { status: bg } = await Location.requestBackgroundPermissionsAsync();
+    return { foreground: true, background: bg === 'granted' };
+  } catch (err) {
+    console.warn('[Location] Permission request warning:', err);
+    return { foreground: false, background: false };
   }
-
-  return true;
 }
 
-// 3. Start Background Updates
 export async function startBackgroundLocationUpdates(
   roomCode: string,
   playerId: string,
   serverUrl: string,
   onLocationUpdate?: (lat: number, lng: number) => void
 ): Promise<boolean> {
-  const hasPermissions = await requestLocationPermissions();
-  if (!hasPermissions) {
-    console.error('[Location] Cannot start background updates without permissions.');
+  setBackgroundLocationConfig(roomCode, playerId, serverUrl, onLocationUpdate);
+
+  const permissions = await requestLocationPermissions();
+  if (!permissions.foreground) {
+    console.warn('[Location] Foreground location permission not granted.');
     return false;
   }
 
-  setBackgroundLocationConfig(roomCode, playerId, serverUrl, onLocationUpdate);
-
-  const isRegistered = await TaskManager.isTaskRegisteredAsync(LOCATION_TASK_NAME);
-  if (isRegistered) {
-    console.log('[Location] Background task already running. Updating config.');
-    return true;
+  // 1. Toujours activer le watcher de premier plan (sur et sans crash)
+  try {
+    if (foregroundSubscription) {
+      foregroundSubscription.remove();
+    }
+    foregroundSubscription = await Location.watchPositionAsync(
+      {
+        accuracy: Location.Accuracy.High,
+        timeInterval: 3000,
+        distanceInterval: 5,
+      },
+      (loc) => {
+        if (loc?.coords) {
+          onLocationUpdate?.(loc.coords.latitude, loc.coords.longitude);
+        }
+      }
+    );
+  } catch (e) {
+    console.warn('[Location] Foreground watch position warning:', e);
   }
 
-  await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
-    accuracy: Location.Accuracy.High,
-    distanceInterval: 10,  // Minimum update interval in meters
-    timeInterval: 5000,    // Minimum time interval in ms (5s)
-    deferredUpdatesInterval: 5000,
-    foregroundService: {
-      notificationTitle: 'ManHunt - GPS Actif',
-      notificationBody: 'Transmet votre position aux chasseurs en arrière-plan.',
-      notificationColor: '#FF3B30',
-    },
-    showsBackgroundLocationIndicator: true, // Needed for iOS blue bar
-  });
+  // 2. Tenter d'activer la tâche d'arrière-plan si la permission est accordée
+  if (permissions.background) {
+    try {
+      const isRegistered = await TaskManager.isTaskRegisteredAsync(LOCATION_TASK_NAME);
+      if (!isRegistered) {
+        const options: Location.LocationOptions = {
+          accuracy: Location.Accuracy.High,
+          distanceInterval: 10,
+          timeInterval: 5000,
+          foregroundService: {
+            notificationTitle: 'ManHunt - GPS Actif',
+            notificationBody: 'Transmet votre position aux chasseurs en arrière-plan.',
+            notificationColor: '#FF3B30',
+          },
+        };
 
-  console.log('[Location] Background location updates started successfully.');
+        if (Platform.OS === 'ios') {
+          options.showsBackgroundLocationIndicator = true;
+        }
+
+        await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, options);
+        console.log('[Location] Background task started successfully.');
+      }
+    } catch (err) {
+      console.warn('[Location] Background location task could not be started safely:', err);
+    }
+  }
+
   return true;
 }
 
-// 4. Stop Background Updates
 export async function stopBackgroundLocationUpdates(): Promise<void> {
-  const isRegistered = await TaskManager.isTaskRegisteredAsync(LOCATION_TASK_NAME);
-  if (isRegistered) {
-    await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
-    console.log('[Location] Background location updates stopped.');
+  if (foregroundSubscription) {
+    foregroundSubscription.remove();
+    foregroundSubscription = null;
   }
+
+  try {
+    const isRegistered = await TaskManager.isTaskRegisteredAsync(LOCATION_TASK_NAME);
+    if (isRegistered) {
+      await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
+      console.log('[Location] Background location updates stopped.');
+    }
+  } catch (err) {
+    console.warn('[Location] Error stopping background updates:', err);
+  }
+
   activeConfig = null;
 }
