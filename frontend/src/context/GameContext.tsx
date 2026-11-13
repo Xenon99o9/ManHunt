@@ -107,22 +107,27 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const handleWSMessage = (msg: any) => {
+    if (!msg) return;
     const action = msg.action || msg.type;
     switch (action) {
       case 'ROOM_STATE':
-        setRoom(msg.payload);
-        if (msg.payload?.players && msg.payload.players[playerId]) {
-          setRole(msg.payload.players[playerId].role);
-        }
-        if (msg.payload?.state && msg.payload.state !== 'LOBBY') {
-          setTimerPhase(msg.payload.state);
+        if (msg.payload) {
+          setRoom(msg.payload);
+          if (msg.payload.players && msg.payload.players[playerId]) {
+            setRole(msg.payload.players[playerId].role);
+          }
+          if (msg.payload.state && msg.payload.state !== 'LOBBY') {
+            setTimerPhase(msg.payload.state);
+          }
         }
         break;
 
       case 'GAME_STARTED':
+        const duration = msg.payload?.head_start_duration || 300;
         setTimerPhase('HEAD_START');
-        setTimerSeconds(msg.payload?.head_start_duration || 300);
-        setTimerTotal(msg.payload?.head_start_duration || 300);
+        setTimerSeconds(duration);
+        setTimerTotal(duration);
+        setRoom((prev) => (prev ? { ...prev, state: 'HEAD_START' } : prev));
         break;
 
       case 'TIMER_TICK':
@@ -130,6 +135,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setTimerPhase(msg.payload.phase);
           setTimerSeconds(msg.payload.remaining_seconds);
           setTimerTotal(msg.payload.total_seconds);
+          if (msg.payload.phase) {
+            setRoom((prev) => (prev ? { ...prev, state: msg.payload.phase } : prev));
+          }
         }
         break;
 
@@ -140,7 +148,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         break;
 
       case 'ERROR':
-        alert(`Erreur: ${msg.payload?.message || msg.reason}`);
+        alert(`Erreur: ${msg.payload?.message || msg.reason || 'Une erreur est survenue'}`);
         break;
     }
   };
