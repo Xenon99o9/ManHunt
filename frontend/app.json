@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "ManHunt",
+    "slug": "manhunt",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#121212"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.manhunt.app",
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "location"
+        ],
+        "NSLocationWhenInUseUsageDescription": "ManHunt a besoin de votre géolocalisation pour transmettre votre position aux chasseurs.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "ManHunt transmet votre position GPS en arrière-plan pendant la partie, même lorsque l'écran est verrouillé.",
+        "NSLocationAlwaysUsageDescription": "ManHunt a besoin de la géolocalisation en arrière-plan pour le bon fonctionnement du jeu de cache-cache."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#121212"
+      },
+      "package": "com.manhunt.app",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "ManHunt a besoin d'accéder à votre position GPS en arrière-plan pour mettre à jour la carte du jeu.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ]
+    ]
+  }
+}
