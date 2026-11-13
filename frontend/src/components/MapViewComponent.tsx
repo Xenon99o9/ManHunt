@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import { Role, GameState, ChasseReveal } from '../types/game';
@@ -16,17 +16,7 @@ export const MapViewComponent: React.FC<Props> = ({
   myLocation,
   chasseReveals,
 }) => {
-  // Masquage de la carte pour les chasseurs pendant la période de fuite (HEAD_START)
-  if (role === 'CHASSEUR' && gameState === 'HEAD_START') {
-    return (
-      <View style={styles.lockedContainer}>
-        <Text style={styles.lockedTitle}>CARTE VERROUILLÉE</Text>
-        <Text style={styles.lockedSub}>
-          Les chassés s'enfuient ! Vous aurez accès à la carte dès la fin du compte à rebours.
-        </Text>
-      </View>
-    );
-  }
+  const [isMapReady, setIsMapReady] = useState(false);
 
   // Verification securisée de la position GPS initiale
   const hasValidMyLocation =
@@ -53,16 +43,22 @@ export const MapViewComponent: React.FC<Props> = ({
       !isNaN(chasse.longitude)
   );
 
+  const isHunterLocked = role === 'CHASSEUR' && gameState === 'HEAD_START';
+
   return (
     <View style={styles.container}>
+      {/* Toujours maintenir le MapView monté pour éviter les cycles d'instanciation C++ natifs */}
       <MapView
         style={styles.map}
         initialRegion={initialRegion}
         showsUserLocation={false}
         showsMyLocationButton={false}
+        onMapReady={() => setIsMapReady(true)}
       >
-        {/* Vue Chasseur : Marqueurs des chassés filtrés et sécurisés */}
-        {role === 'CHASSEUR' &&
+        {/* Vue Chasseur : Marqueurs des chassés (rendu uniquement quand la carte est prête et hors verrouillage) */}
+        {isMapReady &&
+          role === 'CHASSEUR' &&
+          !isHunterLocked &&
           validChasseReveals.map((chasse) => {
             const rawTs = Number(chasse.timestamp);
             const formattedTime =
@@ -80,12 +76,13 @@ export const MapViewComponent: React.FC<Props> = ({
                 title={`${chasse.player_name || 'Chassé'}`}
                 description={`Position connue à ${formattedTime}`}
                 pinColor="#FF3B30"
+                tracksViewChanges={false}
               />
             );
           })}
 
         {/* Marqueur personnel sécurisé */}
-        {hasValidMyLocation && (
+        {isMapReady && hasValidMyLocation && (
           <Marker
             coordinate={{
               latitude: Number(myLocation!.latitude),
@@ -93,9 +90,20 @@ export const MapViewComponent: React.FC<Props> = ({
             }}
             title={role === 'CHASSE' ? 'Ma position (Chassé)' : 'Ma position (Chasseur)'}
             pinColor={role === 'CHASSE' ? '#34C759' : '#007AFF'}
+            tracksViewChanges={false}
           />
         )}
       </MapView>
+
+      {/* Superposition de verrouillage au-dessus de la carte sans démonter la vue native */}
+      {isHunterLocked && (
+        <View style={styles.lockedOverlay}>
+          <Text style={styles.lockedTitle}>CARTE VERROUILLÉE</Text>
+          <Text style={styles.lockedSub}>
+            Les chassés s'enfuient ! Vous aurez accès à la carte dès la fin du compte à rebours.
+          </Text>
+        </View>
+      )}
     </View>
   );
 };
@@ -105,20 +113,23 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: 16,
     overflow: 'hidden',
+    position: 'relative',
   },
   map: {
     width: '100%',
     height: '100%',
   },
-  lockedContainer: {
-    flex: 1,
+  lockedOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: '#1E1E2C',
-    borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
-    borderWidth: 2,
-    borderColor: '#FFDD57',
+    zIndex: 10,
   },
   lockedTitle: {
     color: '#FFDD57',

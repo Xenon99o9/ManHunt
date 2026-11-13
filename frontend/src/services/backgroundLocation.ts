@@ -22,19 +22,34 @@ export const setBackgroundLocationConfig = (
   activeConfig = { roomCode, playerId, serverUrl, onLocationUpdate };
 };
 
-// 1. Définition impérativement au premier niveau de fichier (scope global)
+// 1. Définition blindée au premier niveau de fichier (scope global Headless JS)
 TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
-  if (error) {
-    console.error('[BackgroundLocation] TaskManager error:', error.message);
+  if (error || !data) {
     return;
   }
 
-  if (data) {
-    const { locations } = data as { locations: Location.LocationObject[] };
-    const latestLocation = locations[locations.length - 1];
+  try {
+    const locations = (data as any)?.locations;
+    if (!Array.isArray(locations) || locations.length === 0) {
+      return;
+    }
 
-    if (latestLocation && activeConfig) {
-      const { latitude, longitude } = latestLocation.coords;
+    const latestLocation = locations[locations.length - 1];
+    if (!latestLocation || !latestLocation.coords) {
+      return;
+    }
+
+    const { latitude, longitude } = latestLocation.coords;
+    if (
+      typeof latitude !== 'number' ||
+      typeof longitude !== 'number' ||
+      isNaN(latitude) ||
+      isNaN(longitude)
+    ) {
+      return;
+    }
+
+    if (activeConfig) {
       console.log(`[BackgroundLocation] GPS arrière-plan: ${latitude}, ${longitude}`);
 
       if (activeConfig.onLocationUpdate) {
@@ -42,24 +57,22 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
       }
 
       // Envoi synchrone de secours en HTTP
-      try {
-        let httpUrl = activeConfig.serverUrl.trim().replace(/\/+$/, '');
-        if (httpUrl.startsWith('wss://')) httpUrl = httpUrl.replace(/^wss:\/\//, 'https://');
-        else if (httpUrl.startsWith('ws://')) httpUrl = httpUrl.replace(/^ws:\/\//, 'http://');
-        else if (!httpUrl.startsWith('http://') && !httpUrl.startsWith('https://')) httpUrl = `https://${httpUrl}`;
+      let httpUrl = activeConfig.serverUrl.trim().replace(/\/+$/, '');
+      if (httpUrl.startsWith('wss://')) httpUrl = httpUrl.replace(/^wss:\/\//, 'https://');
+      else if (httpUrl.startsWith('ws://')) httpUrl = httpUrl.replace(/^ws:\/\//, 'http://');
+      else if (!httpUrl.startsWith('http://') && !httpUrl.startsWith('https://')) httpUrl = `https://${httpUrl}`;
 
-        await fetch(`${httpUrl}/api/rooms/${activeConfig.roomCode}/location?player_id=${activeConfig.playerId}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            latitude,
-            longitude,
-          }),
-        }).catch(() => {});
-      } catch (err) {
-        console.warn('[BackgroundLocation] Failed sending background location HTTP sync:', err);
-      }
+      await fetch(`${httpUrl}/api/rooms/${activeConfig.roomCode}/location?player_id=${activeConfig.playerId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          latitude,
+          longitude,
+        }),
+      }).catch(() => {});
     }
+  } catch (err) {
+    console.warn('[BackgroundLocation] TaskManager error caught safely:', err);
   }
 });
 
