@@ -9,12 +9,13 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useGame } from '../context/GameContext';
-import { Role } from '../types/game';
 
 export const LobbyScreen: React.FC = () => {
   const {
     serverUrl,
     setServerUrl,
+    serverHistory,
+    removeServerHistory,
     playerName,
     setPlayerName,
     role,
@@ -34,6 +35,10 @@ export const LobbyScreen: React.FC = () => {
       alert('Veuillez entrer votre pseudo.');
       return;
     }
+    if (!serverUrl.trim()) {
+      alert('Veuillez renseigner l\'adresse du serveur.');
+      return;
+    }
     try {
       setLoading(true);
       await createRoom(playerName.trim(), role);
@@ -49,6 +54,10 @@ export const LobbyScreen: React.FC = () => {
       alert('Veuillez remplir votre pseudo et le code de la room.');
       return;
     }
+    if (!serverUrl.trim()) {
+      alert('Veuillez renseigner l\'adresse du serveur.');
+      return;
+    }
     try {
       setLoading(true);
       await joinRoom(inputCode.trim().toUpperCase(), playerName.trim(), role);
@@ -61,7 +70,7 @@ export const LobbyScreen: React.FC = () => {
 
   const isHost = room?.players[playerId]?.is_host;
 
-  // LOBBY WAITING SCREEN WHEN IN ROOM
+  // ÉCRAN LOBBY EN ATTENTE DANS UNE ROOM
   if (room) {
     const playersList = Object.values(room.players);
     return (
@@ -104,23 +113,44 @@ export const LobbyScreen: React.FC = () => {
     );
   }
 
-  // INITIAL LOBBY FORM SCREEN
+  // ÉCRAN DE CONFIGURATION INITIALE DU LOBBY
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>MANHUNT</Text>
       <Text style={styles.subTitle}>Cache-cache GPS grandeur nature</Text>
 
-      {/* Server URL Config */}
+      {/* Saisie & Sélection de l'URL du serveur */}
       <View style={styles.fieldGroup}>
         <Text style={styles.label}>Adresse du Serveur Backend (FastAPI)</Text>
         <TextInput
           style={styles.input}
           value={serverUrl}
           onChangeText={setServerUrl}
-          placeholder="wss://votre-app.onrender.com"
+          placeholder="https://votre-app.onrender.com"
           placeholderTextColor="#666"
           autoCapitalize="none"
         />
+
+        {/* Historique des serveurs récents enregistrés */}
+        {serverHistory.length > 0 && (
+          <View style={styles.historyContainer}>
+            <Text style={styles.historyLabel}>Serveurs récents :</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.historyScroll}>
+              {serverHistory.map((item) => (
+                <TouchableOpacity
+                  key={item}
+                  style={[styles.historyChip, serverUrl === item && styles.historyChipActive]}
+                  onPress={() => setServerUrl(item)}
+                  onLongPress={() => removeServerHistory(item)}
+                >
+                  <Text style={[styles.historyChipText, serverUrl === item && styles.historyChipTextActive]}>
+                    {item.replace(/^https?:\/\//, '').replace(/^wss?:\/\//, '')}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
       </View>
 
       {/* Pseudo */}
@@ -135,7 +165,7 @@ export const LobbyScreen: React.FC = () => {
         />
       </View>
 
-      {/* Role Selection */}
+      {/* Choix d'équipe */}
       <View style={styles.fieldGroup}>
         <Text style={styles.label}>Choisissez votre Équipe</Text>
         <View style={styles.roleContainer}>
@@ -155,7 +185,7 @@ export const LobbyScreen: React.FC = () => {
         </View>
       </View>
 
-      {/* Action Buttons */}
+      {/* Boutons d'action */}
       <TouchableOpacity
         style={[styles.actionButton, styles.createButton]}
         onPress={handleCreate}
@@ -352,5 +382,37 @@ const styles = StyleSheet.create({
   waitingText: {
     color: '#8A8A9E',
     marginLeft: 10,
+  },
+  historyContainer: {
+    marginTop: 8,
+  },
+  historyLabel: {
+    color: '#8A8A9E',
+    fontSize: 12,
+    marginBottom: 6,
+  },
+  historyScroll: {
+    flexDirection: 'row',
+  },
+  historyChip: {
+    backgroundColor: '#1E1E2C',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#3A3A55',
+  },
+  historyChipActive: {
+    borderColor: '#4DEEEA',
+    backgroundColor: '#1A2E35',
+  },
+  historyChipText: {
+    color: '#8A8A9E',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  historyChipTextActive: {
+    color: '#4DEEEA',
   },
 });

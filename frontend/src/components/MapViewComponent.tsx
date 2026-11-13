@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker } from 'react-native-maps';
 import { Role, GameState, ChasseReveal } from '../types/game';
 
 interface Props {
@@ -16,11 +16,10 @@ export const MapViewComponent: React.FC<Props> = ({
   myLocation,
   chasseReveals,
 }) => {
-  // Hunter behavior: map locked during head start!
+  // Masquage de la carte pour les chasseurs pendant la période de fuite
   if (role === 'CHASSEUR' && gameState === 'HEAD_START') {
     return (
       <View style={styles.lockedContainer}>
-        <Text style={styles.lockedEmoji}>🔒</Text>
         <Text style={styles.lockedTitle}>CARTE VERROUILLÉE</Text>
         <Text style={styles.lockedSub}>
           Les chassés s'enfuient ! Vous aurez accès à la carte dans 5 minutes.
@@ -29,7 +28,7 @@ export const MapViewComponent: React.FC<Props> = ({
     );
   }
 
-  // Initial map center fallback
+  // Position de départ par défaut (ex: Paris si pas encore de GPS)
   const initialRegion = {
     latitude: myLocation?.latitude || 48.8566,
     longitude: myLocation?.longitude || 2.3522,
@@ -39,14 +38,14 @@ export const MapViewComponent: React.FC<Props> = ({
 
   return (
     <View style={styles.container}>
+      {/* Utilisation de la carte native intégrée sans aucune clé API Google */}
       <MapView
-        provider={PROVIDER_GOOGLE}
         style={styles.map}
         initialRegion={initialRegion}
         showsUserLocation={true}
         showsMyLocationButton={true}
       >
-        {/* Hunter view: Display revealed position markers of all Chassés */}
+        {/* Vue Chasseur : Marqueurs des chassés révélés toutes les 5 min */}
         {role === 'CHASSEUR' &&
           chasseReveals.map((chasse) => (
             <Marker
@@ -56,12 +55,12 @@ export const MapViewComponent: React.FC<Props> = ({
                 longitude: chasse.longitude,
               }}
               title={`${chasse.player_name} (Chassé)`}
-              description={`Dernière position connue (${new Date(chasse.timestamp * 1000).toLocaleTimeString()})`}
+              description={`Position connue à ${new Date(chasse.timestamp * 1000).toLocaleTimeString()}`}
               pinColor="#FF3B30"
             />
           ))}
 
-        {/* Chassé view: Display self marker */}
+        {/* Vue Chassé : Marqueur de sa propre position */}
         {role === 'CHASSE' && myLocation && (
           <Marker
             coordinate={{
@@ -96,10 +95,6 @@ const styles = StyleSheet.create({
     padding: 24,
     borderWidth: 2,
     borderColor: '#FFDD57',
-  },
-  lockedEmoji: {
-    fontSize: 64,
-    marginBottom: 16,
   },
   lockedTitle: {
     color: '#FFDD57',

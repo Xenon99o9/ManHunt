@@ -1,11 +1,14 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { Room, Role, ChasseReveal, WSMessage } from '../types/game';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Room, Role, ChasseReveal } from '../types/game';
 import { GameWebSocket } from '../services/websocket';
 import { startBackgroundLocationUpdates, stopBackgroundLocationUpdates } from '../services/backgroundLocation';
 
 interface GameContextType {
   serverUrl: string;
   setServerUrl: (url: string) => void;
+  serverHistory: string[];
+  removeServerHistory: (url: string) => void;
   room: Room | null;
   playerId: string;
   playerName: string;
@@ -25,10 +28,14 @@ interface GameContextType {
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
 
-const DEFAULT_SERVER_URL = ''; // Pas d'URL en dur par défaut pour préserver la confidentialité
+const STORAGE_KEY_SERVER_URL = '@manhunt_server_url';
+const STORAGE_KEY_SERVER_HISTORY = '@manhunt_server_history';
+const DEFAULT_SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || '';
 
 export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [serverUrl, setServerUrl] = useState<string>(DEFAULT_SERVER_URL);
+  const [serverUrl, setServerUrlState] = useState<string>(DEFAULT_SERVER_URL);
+  const [serverHistory, setServerHistory] = useState<string[]>([]);
+
   const [playerId] = useState<string>(() => 'player_' + Math.random().toString(36).substring(2, 9));
   const [playerName, setPlayerName] = useState<string>('');
   const [role, setRole] = useState<Role>('CHASSE');
@@ -42,6 +49,47 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [myLocation, setMyLocation] = useState<{ latitude: number; longitude: number } | null>(null);
 
   const wsRef = useRef<GameWebSocket | null>(null);
+
+  // Charger automatiquement l'URL active et l'historique des serveurs au démarrage
+  useEffect(() => {
+    Promise.all([
+      AsyncStorage.getItem(STORAGE_KEY_SERVER_URL),
+      AsyncStorage.getItem(STORAGE_KEY_SERVER_HISTORY),
+    ])
+      .then(([savedUrl, savedHistory]) => {
+        if (savedUrl) setServerUrlState(savedUrl);
+        if (savedHistory) {
+          try {
+            setServerHistory(JSON.parse(savedHistory));
+          } catch (e) {}
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const setServerUrl = (url: string) => {
+    setServerUrlState(url);
+    AsyncStorage.setItem(STORAGE_KEY_SERVER_URL, url).catch(() => {});
+  };
+
+  const addUrlToHistory = (url: string) => {
+    if (!url || !url.trim()) return;
+    const clean = url.trim();
+    setServerHistory((prev) => {
+      const filtered = prev.filter((item) => item !== clean);
+      const updated = [clean, ...filtered].slice(0, 5); // Conserver les 5 derniers serveurs uniques
+      AsyncStorage.setItem(STORAGE_KEY_SERVER_HISTORY, JSON.stringify(updated)).catch(() => {});
+      return updated;
+    });
+  };
+
+  const removeServerHistory = (urlToRemove: string) => {
+    setServerHistory((prev) => {
+      const updated = prev.filter((item) => item !== urlToRemove);
+      AsyncStorage.setItem(STORAGE_KEY_SERVER_HISTORY, JSON.stringify(updated)).catch(() => {});
+      return updated;
+    });
+  };
 
   const handleWSMessage = (msg: any) => {
     const action = msg.action || msg.type;
@@ -65,7 +113,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       case 'LOCATION_REVEAL':
       case 'HUNTED_POSITIONS_REVEAL':
         const positions = msg.payload?.chasses || msg.hunted_positions || [];
-        console.log('[Context] New GPS Reveal received:', positions);
         setChasseReveals(positions);
         break;
 
@@ -73,6 +120,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         alert(`Erreur: ${msg.payload?.message || msg.reason}`);
         break;
     }
+  };
+
   const getCleanHttpUrl = (rawUrl: string): string => {
     let url = rawUrl.trim().replace(/\/+$/, '');
     if (url.startsWith('wss://')) return url.replace(/^wss:\/\//, 'https://');
@@ -96,6 +145,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setPlayerName(name);
     setRole(selectedRole);
 
+    addUrlToHistory(serverUrl);
     await connectWebSocketAndJoin(code, name, selectedRole);
     return code;
   };
@@ -103,6 +153,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const joinRoom = async (roomCode: string, name: string, selectedRole: Role): Promise<void> => {
     setPlayerName(name);
     setRole(selectedRole);
+    addUrlToHistory(serverUrl);
     await connectWebSocketAndJoin(roomCode, name, selectedRole);
   };
 
@@ -117,16 +168,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     ws.subscribe(handleWSMessage);
     await ws.connect();
 
-    // Send JOIN_ROOM message
     ws.send({
       action: 'JOIN_ROOM',
       payload: { player_name: name, role: selectedRole },
     });
 
-    // Start background location updates via TaskManager
     await startBackgroundLocationUpdates(roomCode, playerId, serverUrl, (lat, lng) => {
       setMyLocation({ latitude: lat, longitude: lng });
-      // Send location over WebSocket when live
       ws.send({
         action: 'UPDATE_LOCATION',
         payload: { latitude: lat, longitude: lng },
@@ -161,6 +209,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         serverUrl,
         setServerUrl,
+        serverHistory,
+        removeServerHistory,
         room,
         playerId,
         playerName,
