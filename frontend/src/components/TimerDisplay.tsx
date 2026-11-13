@@ -8,13 +8,17 @@ interface Props {
 
 export const TimerDisplay: React.FC<Props> = ({ seconds, phase }) => {
   const formatTime = (totalSecs: number) => {
-    const mins = Math.floor(totalSecs / 60);
-    const secs = totalSecs % 60;
+    const safeSecs =
+      typeof totalSecs === 'number' && !isNaN(totalSecs) && totalSecs >= 0
+        ? Math.floor(totalSecs)
+        : 0;
+    const mins = Math.floor(safeSecs / 60);
+    const secs = safeSecs % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
   const getPhaseTitle = () => {
-    if (phase === 'HEAD_START') return 'CHRONO DE FUITE (5 MIN)';
+    if (phase === 'HEAD_START') return 'CHRONO DE FUITE';
     if (phase === 'HUNTING') return 'PROCHAINE RÉVÉLATION DANS';
     return 'LOBBY EN ATTENTE';
   };
