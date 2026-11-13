@@ -39,7 +39,7 @@ class Room:
         self.start_time: Optional[float] = None
 
         # Options configurables par l'hôte
-        self.head_start_duration: int = 300  # 5 minutes de fuite
+        self.head_start_duration: int = 300  # 5 minutes de fuite par défaut
         self.reveal_interval: int = 300      # 5 minutes par défaut entre chaque reveal (60s, 120s, 180s, 300s, 600s)
         self.role_mode: str = "FREE"         # 'FREE' (libre), 'HOST' (par l'hôte), 'RANDOM' (aléatoire)
         self.max_hunters: int = 1            # Utilisé pour le mode aléatoire
@@ -120,7 +120,7 @@ async def broadcast_hunted_positions(room: Room):
                 "player_name": player.name,
                 "latitude": player.latitude,
                 "longitude": player.longitude,
-                "last_updated": player.last_updated
+                "last_updated": player.last_updated or current_time
             })
 
     payload = {
@@ -165,7 +165,7 @@ async def location_broadcast_loop():
 
             for room_code, room in list(ROOMS.items()):
                 if room.state == "HEAD_START":
-                    elapsed = current_time - room.start_time
+                    elapsed = current_time - (room.start_time or current_time)
                     remaining = max(0, int(room.head_start_duration - elapsed))
 
                     # Diffuser le tick d'une seconde
@@ -183,7 +183,7 @@ async def location_broadcast_loop():
                         except Exception:
                             pass
 
-                    # Fin des 5 minutes de fuite -> passage en chasse active
+                    # Fin du chrono de fuite -> passage en chasse active
                     if remaining <= 0:
                         room.state = "HUNTING"
                         room.last_reveal_time = current_time
@@ -194,7 +194,8 @@ async def location_broadcast_loop():
                         await broadcast_room_state(room_code)
 
                 elif room.state == "HUNTING":
-                    remaining_reveal = max(0, int(room.next_reveal_time - current_time))
+                    next_reveal = room.next_reveal_time or (current_time + room.reveal_interval)
+                    remaining_reveal = max(0, int(next_reveal - current_time))
 
                     tick_msg = {
                         "action": "TIMER_TICK",
@@ -211,7 +212,7 @@ async def location_broadcast_loop():
                             pass
 
                     # Intervalle atteint -> Nouvelle révélation des positions
-                    if current_time >= room.next_reveal_time:
+                    if current_time >= next_reveal:
                         await broadcast_hunted_positions(room)
                         room.last_reveal_time = current_time
                         room.next_reveal_time = current_time + room.reveal_interval
@@ -345,7 +346,9 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: st
                 if player and player_ids and player_id == player_ids[0]:  # Verifier que c'est l'hôte
                     payload = data.get("payload", {})
                     if "reveal_interval" in payload:
-                        room.reveal_interval = int(payload["reveal_interval"])
+                        interval = int(payload["reveal_interval"])
+                        room.reveal_interval = interval
+                        room.head_start_duration = interval  # Met également à jour le temps de fuite initial !
                     if "role_mode" in payload:
                         room.role_mode = str(payload["role_mode"])
                     if "max_hunters" in payload:

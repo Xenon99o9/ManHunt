@@ -28,13 +28,30 @@ export const MapViewComponent: React.FC<Props> = ({
     );
   }
 
-  // Position de départ par défaut (Paris si pas encore de GPS)
+  // Verification securisée de la position GPS initiale
+  const hasValidMyLocation =
+    myLocation &&
+    typeof myLocation.latitude === 'number' &&
+    typeof myLocation.longitude === 'number' &&
+    !isNaN(myLocation.latitude) &&
+    !isNaN(myLocation.longitude);
+
   const initialRegion = {
-    latitude: myLocation?.latitude || 48.8566,
-    longitude: myLocation?.longitude || 2.3522,
+    latitude: hasValidMyLocation ? myLocation!.latitude : 48.8566,
+    longitude: hasValidMyLocation ? myLocation!.longitude : 2.3522,
     latitudeDelta: 0.015,
     longitudeDelta: 0.015,
   };
+
+  // Filtrage ultra-sécurisé des marqueurs de chassés (évite tout crash JS ou C++ Android Native)
+  const validChasseReveals = (chasseReveals || []).filter(
+    (chasse) =>
+      chasse &&
+      typeof chasse.latitude === 'number' &&
+      typeof chasse.longitude === 'number' &&
+      !isNaN(chasse.latitude) &&
+      !isNaN(chasse.longitude)
+  );
 
   return (
     <View style={styles.container}>
@@ -44,27 +61,35 @@ export const MapViewComponent: React.FC<Props> = ({
         showsUserLocation={false}
         showsMyLocationButton={false}
       >
-        {/* Vue Chasseur : Marqueurs des chassés révélés par le serveur */}
+        {/* Vue Chasseur : Marqueurs des chassés filtrés et sécurisés */}
         {role === 'CHASSEUR' &&
-          chasseReveals.map((chasse) => (
-            <Marker
-              key={chasse.player_id}
-              coordinate={{
-                latitude: chasse.latitude,
-                longitude: chasse.longitude,
-              }}
-              title={`${chasse.player_name} (Chassé)`}
-              description={`Position connue à ${new Date(chasse.timestamp * 1000).toLocaleTimeString()}`}
-              pinColor="#FF3B30"
-            />
-          ))}
+          validChasseReveals.map((chasse) => {
+            const rawTs = Number(chasse.timestamp);
+            const formattedTime =
+              rawTs && !isNaN(rawTs)
+                ? new Date(rawTs * 1000).toLocaleTimeString()
+                : 'Récemment';
 
-        {/* Vue Chassé ou marqueur personnel */}
-        {myLocation && (
+            return (
+              <Marker
+                key={chasse.player_id || Math.random().toString()}
+                coordinate={{
+                  latitude: Number(chasse.latitude),
+                  longitude: Number(chasse.longitude),
+                }}
+                title={`${chasse.player_name || 'Chassé'}`}
+                description={`Position connue à ${formattedTime}`}
+                pinColor="#FF3B30"
+              />
+            );
+          })}
+
+        {/* Marqueur personnel sécurisé */}
+        {hasValidMyLocation && (
           <Marker
             coordinate={{
-              latitude: myLocation.latitude,
-              longitude: myLocation.longitude,
+              latitude: Number(myLocation!.latitude),
+              longitude: Number(myLocation!.longitude),
             }}
             title={role === 'CHASSE' ? 'Ma position (Chassé)' : 'Ma position (Chasseur)'}
             pinColor={role === 'CHASSE' ? '#34C759' : '#007AFF'}
