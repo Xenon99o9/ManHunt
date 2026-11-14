@@ -195,11 +195,10 @@ export const MapViewComponent: React.FC<Props> = ({
       const left = Math.round(viewport.width / 2 + (tx * TILE_SIZE - centerWorldX));
       const top = Math.round(viewport.height / 2 + (ty * TILE_SIZE - centerWorldY));
       const subdomain = ['a', 'b', 'c'][(tx + ty) % 3];
-      const url = darkMap
-        ? `https://${subdomain}.basemaps.cartocdn.com/dark_all/${zoom}/${tx}/${ty}.png`
-        : `https://${subdomain}.basemaps.cartocdn.com/rastertiles/voyager/${zoom}/${tx}/${ty}.png`;
+      // Tuiles publiques OpenStreetMap officielles (100% gratuites, sans clé API requise)
+      const url = `https://${subdomain}.tile.openstreetmap.org/${zoom}/${tx}/${ty}.png`;
       tiles.push({
-        key: `${darkMap ? 'd' : 'v'}_${zoom}_${tx}_${ty}`,
+        key: `osm_${zoom}_${tx}_${ty}`,
         url,
         left,
         top,
