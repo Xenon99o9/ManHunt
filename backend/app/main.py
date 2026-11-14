@@ -113,12 +113,14 @@ async def broadcast_hunted_positions(room: Room):
     hunted_positions = []
     for player in room.players.values():
         if player.role == "chasse" and player.latitude is not None and player.longitude is not None:
+            ts = player.last_updated or current_time
             hunted_positions.append({
                 "player_id": player.player_id,
                 "player_name": player.name,
                 "latitude": player.latitude,
                 "longitude": player.longitude,
-                "last_updated": player.last_updated or current_time
+                "timestamp": ts,
+                "last_updated": ts
             })
 
     payload = {
@@ -397,11 +399,13 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str, player_id: st
                             logger.warning(f"⚠️ Erreur d'envoi GAME_STARTED au joueur {p.player_id}: {e}")
                     await broadcast_room_state(room_code_upper)
 
-            elif "latitude" in data and "longitude" in data:
-                player_conn.latitude = float(data["latitude"])
-                player_conn.longitude = float(data["longitude"])
-                player_conn.last_updated = time.time()
-                logger.info(f"📍 [WS GPS UPDATE] Room [{room_code_upper}] Player [{player_id}] ({player_conn.role}): Lat={player_conn.latitude}, Lng={player_conn.longitude}")
+            elif action == "UPDATE_LOCATION" or ("latitude" in data and "longitude" in data):
+                loc_data = data.get("payload", data) if action == "UPDATE_LOCATION" else data
+                if "latitude" in loc_data and "longitude" in loc_data:
+                    player_conn.latitude = float(loc_data["latitude"])
+                    player_conn.longitude = float(loc_data["longitude"])
+                    player_conn.last_updated = time.time()
+                    logger.info(f"📍 [WS GPS UPDATE] Room [{room_code_upper}] Player [{player_id}] ({player_conn.role}): Lat={player_conn.latitude}, Lng={player_conn.longitude}")
 
             elif action == "PING":
                 await websocket.send_json({"type": "PONG", "timestamp": time.time()})

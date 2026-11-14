@@ -19,7 +19,6 @@
       "bundleIdentifier": "com.manhunt.app",
       "infoPlist": {
         "UIBackgroundModes": [
-          "location",
           "location"
         ],
         "NSLocationWhenInUseUsageDescription": "ManHunt a besoin de votre géolocalisation pour transmettre votre position aux chasseurs.",

@@ -82,7 +82,7 @@ export const MapViewComponent: React.FC<Props> = ({
           role === 'CHASSEUR' &&
           !isHunterLocked &&
           validChasseReveals.map((chasse) => {
-            const rawTs = Number(chasse.timestamp);
+            const rawTs = Number(chasse.timestamp ?? (chasse as any).last_updated);
             const formattedTime =
               rawTs && !isNaN(rawTs)
                 ? new Date(rawTs * 1000).toLocaleTimeString()

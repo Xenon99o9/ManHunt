@@ -23,19 +23,20 @@ export const setBackgroundLocationConfig = (
 };
 
 // 1. Définition blindée au premier niveau de fichier (scope global Headless JS)
-TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
-  if (error || !data) {
-    return;
-  }
-
+TaskManager.defineTask(LOCATION_TASK_NAME, async (taskBody) => {
   try {
+    const { data, error } = taskBody || {};
+    if (error || !data) {
+      return;
+    }
+
     const locations = (data as any)?.locations;
     if (!Array.isArray(locations) || locations.length === 0) {
       return;
     }
 
     const latestLocation = locations[locations.length - 1];
-    if (!latestLocation || !latestLocation.coords) {
+    if (!latestLocation?.coords) {
       return;
     }
 
@@ -107,6 +108,11 @@ export async function startBackgroundLocationUpdates(
 
   // 1. Toujours activer le watcher de premier plan (sur et sans crash)
   try {
+    const initialLoc = await Location.getLastKnownPositionAsync();
+    if (initialLoc?.coords) {
+      onLocationUpdate?.(initialLoc.coords.latitude, initialLoc.coords.longitude);
+    }
+
     if (foregroundSubscription) {
       foregroundSubscription.remove();
     }
@@ -114,7 +120,7 @@ export async function startBackgroundLocationUpdates(
       {
         accuracy: Location.Accuracy.High,
         timeInterval: 3000,
-        distanceInterval: 5,
+        distanceInterval: 0,
       },
       (loc) => {
         if (loc?.coords) {
@@ -131,7 +137,7 @@ export async function startBackgroundLocationUpdates(
     try {
       const isRegistered = await TaskManager.isTaskRegisteredAsync(LOCATION_TASK_NAME);
       if (!isRegistered) {
-        const options: Location.LocationOptions = {
+        const options: Location.LocationTaskOptions = {
           accuracy: Location.Accuracy.High,
           distanceInterval: 10,
           timeInterval: 5000,
