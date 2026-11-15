@@ -15,24 +15,22 @@ interface Props {
   gameState: GameState;
   myLocation: { latitude: number; longitude: number } | null;
   chasseReveals: ChasseReveal[];
+  anonymousMarkers?: boolean;
 }
 
 const TILE_SIZE = 256;
 const MIN_ZOOM = 13;
 const MAX_ZOOM = 19;
-const DEFAULT_ZOOM = 17; // Niveau rue / bâtiment très précis
+const DEFAULT_ZOOM = 17;
 
-// Coordonnées par défaut (Paris) avant le 1er fix GPS
 const DEFAULT_LAT = 48.8566;
 const DEFAULT_LON = 2.3522;
 
-// Conversion Longitude -> Pixel global X (Projection Web Mercator EPSG:3857)
 function lonToWorldX(lon: number, zoom: number): number {
   const scale = TILE_SIZE * Math.pow(2, zoom);
   return ((lon + 180) / 360) * scale;
 }
 
-// Conversion Latitude -> Pixel global Y (Projection Web Mercator EPSG:3857)
 function latToWorldY(lat: number, zoom: number): number {
   const clampedLat = Math.max(-85.0511, Math.min(85.0511, lat));
   const rad = (clampedLat * Math.PI) / 180;
@@ -40,20 +38,17 @@ function latToWorldY(lat: number, zoom: number): number {
   return ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * scale;
 }
 
-// Conversion inverse Pixel global X -> Longitude
 function worldXToLon(x: number, zoom: number): number {
   const scale = TILE_SIZE * Math.pow(2, zoom);
   return (x / scale) * 360 - 180;
 }
 
-// Conversion inverse Pixel global Y -> Latitude
 function worldYToLat(y: number, zoom: number): number {
   const scale = TILE_SIZE * Math.pow(2, zoom);
   const n = Math.PI - (2 * Math.PI * y) / scale;
   return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
 }
 
-// Calcul de la distance exacte en mètres (Formule de Haversine)
 function getDistanceMeters(
   lat1: number,
   lon1: number,
@@ -74,10 +69,10 @@ function getDistanceMeters(
 }
 
 export const MapViewComponent: React.FC<Props> = ({
-  role,
   gameState,
   myLocation,
   chasseReveals,
+  anonymousMarkers = false,
 }) => {
   const [viewport, setViewport] = useState({ width: 360, height: 480 });
   const [zoom, setZoom] = useState<number>(DEFAULT_ZOOM);
@@ -86,17 +81,14 @@ export const MapViewComponent: React.FC<Props> = ({
     lon: DEFAULT_LON,
   });
   const [followUser, setFollowUser] = useState<boolean>(true);
-  const [darkMap, setDarkMap] = useState<boolean>(false);
-  const [selectedMarkerId, setSelectedMarkerId] = useState<string | null>(null);
+  const [targetIndex, setTargetIndex] = useState<number>(0);
 
-  // Décalage tactile en cours de glissement (en pixels)
   const [dragOffset, setDragOffset] = useState<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
   const centerRef = useRef(centerCoord);
   centerRef.current = centerCoord;
 
-  // Vérification sécurisée de la position GPS personnelle
   const hasValidMyLocation = Boolean(
     myLocation &&
       typeof myLocation.latitude === 'number' &&
@@ -105,7 +97,6 @@ export const MapViewComponent: React.FC<Props> = ({
       !isNaN(myLocation.longitude)
   );
 
-  // Centrer automatiquement sur le joueur tant que le mode suivi est actif
   useEffect(() => {
     if (hasValidMyLocation && followUser && myLocation) {
       setCenterCoord({
@@ -115,7 +106,6 @@ export const MapViewComponent: React.FC<Props> = ({
     }
   }, [hasValidMyLocation, myLocation?.latitude, myLocation?.longitude, followUser]);
 
-  // Gestionnaire de déplacement tactile fluide (PanResponder 100% JS, zéro crash natif)
   const panResponder = useMemo(
     () =>
       PanResponder.create({
@@ -153,13 +143,8 @@ export const MapViewComponent: React.FC<Props> = ({
     }
   };
 
-  const handleZoomIn = () => {
-    setZoom((prev) => Math.min(MAX_ZOOM, prev + 1));
-  };
-
-  const handleZoomOut = () => {
-    setZoom((prev) => Math.max(MIN_ZOOM, prev - 1));
-  };
+  const handleZoomIn = () => setZoom((prev) => Math.min(MAX_ZOOM, prev + 1));
+  const handleZoomOut = () => setZoom((prev) => Math.max(MIN_ZOOM, prev - 1));
 
   const handleRecenter = () => {
     setFollowUser(true);
@@ -172,11 +157,9 @@ export const MapViewComponent: React.FC<Props> = ({
     }
   };
 
-  // Coordonnée pixel globale actuelle du centre de l'écran
   const centerWorldX = lonToWorldX(centerCoord.lon, zoom) - dragOffset.dx;
   const centerWorldY = latToWorldY(centerCoord.lat, zoom) - dragOffset.dy;
 
-  // Calcul des tuiles OpenStreetMap visibles dans le viewport
   const maxTileIndex = Math.pow(2, zoom) - 1;
   const minTileX = Math.max(0, Math.floor((centerWorldX - viewport.width / 2) / TILE_SIZE) - 1);
   const maxTileX = Math.min(
@@ -195,7 +178,6 @@ export const MapViewComponent: React.FC<Props> = ({
       const left = Math.round(viewport.width / 2 + (tx * TILE_SIZE - centerWorldX));
       const top = Math.round(viewport.height / 2 + (ty * TILE_SIZE - centerWorldY));
       const subdomain = ['a', 'b', 'c'][(tx + ty) % 3];
-      // Tuiles publiques OpenStreetMap officielles (100% gratuites, sans clé API requise)
       const url = `https://${subdomain}.tile.openstreetmap.org/${zoom}/${tx}/${ty}.png`;
       tiles.push({
         key: `osm_${zoom}_${tx}_${ty}`,
@@ -206,19 +188,17 @@ export const MapViewComponent: React.FC<Props> = ({
     }
   }
 
-  // Filtrage sécurisé des marqueurs de chassés
-  const validChasseReveals = (chasseReveals || []).filter(
-    (chasse) =>
-      chasse &&
-      typeof chasse.latitude === 'number' &&
-      typeof chasse.longitude === 'number' &&
-      !isNaN(chasse.latitude) &&
-      !isNaN(chasse.longitude)
+  // Marqueurs figés du dernier ping (visibles pour TOUS les joueurs en phase HUNTING)
+  const validSnapshotMarkers = (chasseReveals || []).filter(
+    (m) =>
+      m &&
+      typeof m.latitude === 'number' &&
+      typeof m.longitude === 'number' &&
+      !isNaN(m.latitude) &&
+      !isNaN(m.longitude)
   );
 
-  const isHunterLocked = role === 'CHASSEUR' && gameState === 'HEAD_START';
-
-  // Position écran du joueur
+  // Position personnelle en direct (couleur distincte Cyan #00E5FF)
   const myScreenPos =
     hasValidMyLocation && myLocation
       ? {
@@ -233,7 +213,6 @@ export const MapViewComponent: React.FC<Props> = ({
 
   return (
     <View style={styles.container} onLayout={handleLayout}>
-      {/* Surface de carte interactive OpenStreetMap (0 module natif Google Maps = 0 crash Android) */}
       <View style={styles.mapSurface} {...panResponder.panHandlers}>
         {tiles.map((tile) => (
           <Image
@@ -253,39 +232,59 @@ export const MapViewComponent: React.FC<Props> = ({
           />
         ))}
 
-        {/* Marqueurs des Chassés (visibles uniquement pour les Chasseurs en phase HUNTING) */}
-        {role === 'CHASSEUR' &&
-          !isHunterLocked &&
-          validChasseReveals.map((chasse, index) => {
+        {/* Marqueurs figés issus du dernier Ping GPS ou d'une Prise de Risque */}
+        {gameState === 'HUNTING' &&
+          validSnapshotMarkers.map((marker, index) => {
             const screenLeft =
               viewport.width / 2 +
-              (lonToWorldX(Number(chasse.longitude), zoom) - centerWorldX);
+              (lonToWorldX(Number(marker.longitude), zoom) - centerWorldX);
             const screenTop =
               viewport.height / 2 +
-              (latToWorldY(Number(chasse.latitude), zoom) - centerWorldY);
+              (latToWorldY(Number(marker.latitude), zoom) - centerWorldY);
 
-            const rawTs = Number(chasse.timestamp ?? (chasse as any).last_updated);
+            const isHunterMarker = marker.role === 'CHASSEUR';
+            const isRiskMarker = marker.source === 'RISK_TAKEN';
+
+            const rawTs = Number(marker.timestamp ?? marker.last_updated);
             const formattedTime =
               rawTs && !isNaN(rawTs)
-                ? new Date(rawTs * 1000).toLocaleTimeString()
-                : 'Récemment';
+                ? new Date(rawTs * 1000).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  })
+                : '';
 
             const distanceMeters =
               hasValidMyLocation && myLocation
                 ? getDistanceMeters(
                     myLocation.latitude,
                     myLocation.longitude,
-                    Number(chasse.latitude),
-                    Number(chasse.longitude)
+                    Number(marker.latitude),
+                    Number(marker.longitude)
                   )
                 : null;
 
-            const markerId = chasse.player_id || `chasse_${index}`;
-            const isSelected = selectedMarkerId === markerId;
+            const pinColor = isRiskMarker
+              ? '#FF9500'
+              : isHunterMarker
+              ? '#FF3B30'
+              : '#34C759';
+
+            const labelTitle = anonymousMarkers
+              ? isRiskMarker
+                ? '⚡ Risque'
+                : isHunterMarker
+                ? 'Chasseur'
+                : 'Chassé'
+              : `${isRiskMarker ? '⚡ ' : ''}${
+                  marker.display_name || marker.player_name || (isHunterMarker ? 'Chasseur' : 'Chassé')
+                }${distanceMeters !== null ? ` • ${distanceMeters}m` : ''}`;
 
             return (
               <View
-                key={markerId}
+                key={`${marker.player_id || index}_${marker.source || 'PING'}`}
+                pointerEvents="none"
                 style={[
                   styles.markerWrapper,
                   {
@@ -294,27 +293,22 @@ export const MapViewComponent: React.FC<Props> = ({
                   },
                 ]}
               >
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  onPress={() => setSelectedMarkerId(isSelected ? null : markerId)}
-                  style={styles.markerTouchArea}
-                >
-                  <View style={styles.huntedCallout}>
-                    <Text style={styles.huntedCalloutTitle} numberOfLines={1}>
-                      🎯 {chasse.player_name || 'Chassé'}
-                      {distanceMeters !== null ? ` • ${distanceMeters} m` : ''}
-                    </Text>
-                    <Text style={styles.huntedCalloutSub}>Vu à {formattedTime}</Text>
-                  </View>
-                  <View style={styles.huntedPinOuter}>
-                    <View style={styles.huntedPinInner} />
-                  </View>
-                </TouchableOpacity>
+                <View style={[styles.calloutBox, { borderColor: pinColor }]}>
+                  <Text style={styles.calloutTitle} numberOfLines={1}>
+                    {labelTitle}
+                  </Text>
+                  {!anonymousMarkers && formattedTime ? (
+                    <Text style={styles.calloutSub}>Ping {formattedTime}</Text>
+                  ) : null}
+                </View>
+                <View style={[styles.pinOuter, { backgroundColor: pinColor }]}>
+                  <View style={styles.pinInner} />
+                </View>
               </View>
             );
           })}
 
-        {/* Marqueur personnel du joueur */}
+        {/* Point personnel en DIRECT (Cyan #00E5FF distinct des pings figés) */}
         {myScreenPos && (
           <View
             pointerEvents="none"
@@ -326,43 +320,30 @@ export const MapViewComponent: React.FC<Props> = ({
               },
             ]}
           >
-            <View
-              style={[
-                styles.myPulseRing,
-                role === 'CHASSE' ? styles.myPulseGreen : styles.myPulseBlue,
-              ]}
-            />
-            <View
-              style={[
-                styles.myDot,
-                role === 'CHASSE' ? styles.myDotGreen : styles.myDotBlue,
-              ]}
-            />
+            <View style={styles.myPulseRing} />
+            <View style={styles.myDot} />
           </View>
         )}
       </View>
 
-      {/* Bandeau d'état GPS & Cibles (en haut de la carte) */}
+      {/* Barre supérieure : Légende + Navigation entre les points du dernier Ping */}
       <View style={styles.topInfoBar} pointerEvents="box-none">
-        <View style={styles.gpsStatusPill}>
-          <View
-            style={[
-              styles.gpsDotIndicator,
-              { backgroundColor: hasValidMyLocation ? '#34C759' : '#FFCC00' },
-            ]}
-          />
-          <Text style={styles.gpsStatusText}>
-            {hasValidMyLocation
-              ? `GPS Précis (${myLocation!.latitude.toFixed(5)}, ${myLocation!.longitude.toFixed(5)})`
-              : 'Acquisition du signal GPS...'}
-          </Text>
+        <View style={styles.legendPill}>
+          <View style={[styles.legendDot, { backgroundColor: '#00E5FF' }]} />
+          <Text style={styles.legendText}>Moi (Direct)</Text>
+          <View style={[styles.legendDot, { backgroundColor: '#34C759', marginLeft: 8 }]} />
+          <Text style={styles.legendText}>Chassé</Text>
+          <View style={[styles.legendDot, { backgroundColor: '#FF3B30', marginLeft: 8 }]} />
+          <Text style={styles.legendText}>Chasseur</Text>
         </View>
 
-        {role === 'CHASSEUR' && !isHunterLocked && validChasseReveals.length > 0 && (
+        {gameState === 'HUNTING' && validSnapshotMarkers.length > 0 && (
           <TouchableOpacity
             style={styles.targetFocusPill}
             onPress={() => {
-              const target = validChasseReveals[0];
+              const nextIdx = targetIndex % validSnapshotMarkers.length;
+              const target = validSnapshotMarkers[nextIdx];
+              setTargetIndex(nextIdx + 1);
               setFollowUser(false);
               setCenterCoord({
                 lat: Number(target.latitude),
@@ -372,21 +353,23 @@ export const MapViewComponent: React.FC<Props> = ({
             }}
           >
             <Text style={styles.targetFocusText}>
-              🎯 Voir Chassé ({validChasseReveals.length})
+              🎯 Ping ({validSnapshotMarkers.length})
             </Text>
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Contrôles de Zoom, Thème et Recentrage GPS */}
-      <View style={styles.controlsColumn} pointerEvents="box-none">
-        <TouchableOpacity
-          style={styles.controlButton}
-          onPress={() => setDarkMap((prev) => !prev)}
-        >
-          <Text style={styles.controlButtonText}>{darkMap ? '☀️' : '🌙'}</Text>
-        </TouchableOpacity>
+      {/* Bandeau d'information pendant l'avance (Carte non verrouillée mais vide de pings) */}
+      {gameState === 'HEAD_START' && (
+        <View style={styles.headStartBanner} pointerEvents="none">
+          <Text style={styles.headStartBannerText}>
+            ⏳ Période d'avance : les positions seront révélées au 1er Ping GPS
+          </Text>
+        </View>
+      )}
 
+      {/* Contrôles de Zoom et Recentrage GPS */}
+      <View style={styles.controlsColumn} pointerEvents="box-none">
         <TouchableOpacity style={styles.controlButton} onPress={handleZoomIn}>
           <Text style={styles.controlButtonText}>＋</Text>
         </TouchableOpacity>
@@ -396,30 +379,18 @@ export const MapViewComponent: React.FC<Props> = ({
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[
-            styles.controlButton,
-            followUser && styles.controlButtonActive,
-          ]}
+          style={[styles.controlButton, followUser && styles.controlButtonActive]}
           onPress={handleRecenter}
         >
           <Text style={styles.controlButtonText}>📍</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Mention OpenStreetMap */}
       <View style={styles.attributionBox} pointerEvents="none">
-        <Text style={styles.attributionText}>© OpenStreetMap • Zoom {zoom}/19</Text>
+        <Text style={styles.attributionText}>
+          © OpenStreetMap • Zoom {zoom}/19 • Pings figés
+        </Text>
       </View>
-
-      {/* Superposition de verrouillage au-dessus de la carte pendant HEAD_START */}
-      {isHunterLocked && (
-        <View style={styles.lockedOverlay}>
-          <Text style={styles.lockedTitle}>CARTE VERROUILLÉE</Text>
-          <Text style={styles.lockedSub}>
-            Les chassés s'enfuient ! Vous aurez accès à la carte dès la fin du compte à rebours.
-          </Text>
-        </View>
-      )}
     </View>
   );
 };
@@ -455,77 +426,62 @@ const styles = StyleSheet.create({
     marginTop: -18,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 5,
+    zIndex: 8,
   },
   myPulseRing: {
     position: 'absolute',
     width: 34,
     height: 34,
     borderRadius: 17,
-    opacity: 0.3,
-  },
-  myPulseGreen: {
-    backgroundColor: '#34C759',
-  },
-  myPulseBlue: {
-    backgroundColor: '#007AFF',
+    backgroundColor: '#00E5FF',
+    opacity: 0.32,
   },
   myDot: {
     width: 16,
     height: 16,
     borderRadius: 8,
+    backgroundColor: '#00E5FF',
     borderWidth: 3,
     borderColor: '#FFFFFF',
-    elevation: 4,
-  },
-  myDotGreen: {
-    backgroundColor: '#34C759',
-  },
-  myDotBlue: {
-    backgroundColor: '#007AFF',
+    elevation: 5,
   },
   markerWrapper: {
     position: 'absolute',
     width: 160,
     marginLeft: -80,
-    marginTop: -62,
+    marginTop: -56,
     alignItems: 'center',
     zIndex: 6,
   },
-  markerTouchArea: {
-    alignItems: 'center',
-  },
-  huntedCallout: {
+  calloutBox: {
     backgroundColor: 'rgba(18, 18, 28, 0.92)',
     paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingVertical: 3,
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#FF3B30',
-    marginBottom: 4,
+    borderWidth: 1.5,
+    marginBottom: 3,
     alignItems: 'center',
   },
-  huntedCalloutTitle: {
+  calloutTitle: {
     color: '#FFFFFF',
     fontSize: 11,
     fontWeight: 'bold',
   },
-  huntedCalloutSub: {
-    color: '#FFDD57',
-    fontSize: 10,
+  calloutSub: {
+    color: '#A0A0B0',
+    fontSize: 9,
   },
-  huntedPinOuter: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: '#FF3B30',
-    borderWidth: 3,
+  pinOuter: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2.5,
     borderColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 5,
+    elevation: 4,
   },
-  huntedPinInner: {
+  pinInner: {
     width: 6,
     height: 6,
     borderRadius: 3,
@@ -539,45 +495,64 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    zIndex: 7,
+    zIndex: 9,
   },
-  gpsStatusPill: {
+  legendPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(18, 18, 28, 0.85)',
+    backgroundColor: 'rgba(18, 18, 28, 0.88)',
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#3A3A55',
   },
-  gpsDotIndicator: {
+  legendDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    marginRight: 6,
+    marginRight: 4,
   },
-  gpsStatusText: {
+  legendText: {
     color: '#E0E0E0',
-    fontSize: 11,
-    fontWeight: '600',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
   targetFocusPill: {
-    backgroundColor: '#FF3B30',
+    backgroundColor: '#FFDD57',
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 12,
   },
   targetFocusText: {
-    color: '#FFFFFF',
+    color: '#12121C',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  headStartBanner: {
+    position: 'absolute',
+    bottom: 32,
+    left: 14,
+    right: 64,
+    backgroundColor: 'rgba(18, 18, 28, 0.9)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FFDD57',
+    zIndex: 9,
+  },
+  headStartBannerText: {
+    color: '#FFDD57',
     fontSize: 11,
     fontWeight: 'bold',
+    textAlign: 'center',
   },
   controlsColumn: {
     position: 'absolute',
     right: 10,
     bottom: 28,
-    zIndex: 7,
+    zIndex: 9,
   },
   controlButton: {
     width: 42,
@@ -591,7 +566,7 @@ const styles = StyleSheet.create({
     borderColor: '#3A3A55',
   },
   controlButtonActive: {
-    borderColor: '#4DEEEA',
+    borderColor: '#00E5FF',
     backgroundColor: 'rgba(26, 46, 53, 0.95)',
   },
   controlButtonText: {
@@ -603,7 +578,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 6,
     left: 10,
-    backgroundColor: 'rgba(18, 18, 28, 0.7)',
+    backgroundColor: 'rgba(18, 18, 28, 0.72)',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
@@ -612,30 +587,5 @@ const styles = StyleSheet.create({
   attributionText: {
     color: '#A0A0B0',
     fontSize: 9,
-  },
-  lockedOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#1E1E2C',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-    zIndex: 10,
-  },
-  lockedTitle: {
-    color: '#FFDD57',
-    fontSize: 22,
-    fontWeight: '900',
-    letterSpacing: 1.5,
-    marginBottom: 8,
-  },
-  lockedSub: {
-    color: '#A0A0B0',
-    fontSize: 14,
-    textAlign: 'center',
-    lineHeight: 20,
   },
 });

@@ -1,8 +1,22 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Room, Role, ChasseReveal, RoleMode } from '../types/game';
+import { Room, Role, ChasseReveal, RoleMode, GameMode } from '../types/game';
 import { GameWebSocket } from '../services/websocket';
 import { startBackgroundLocationUpdates, stopBackgroundLocationUpdates } from '../services/backgroundLocation';
+
+export interface RoomConfigUpdate {
+  game_mode?: GameMode;
+  game_duration_seconds?: number;
+  head_start_duration?: number;
+  reveal_interval?: number;
+  role_mode?: RoleMode;
+  max_hunters?: number;
+  anonymous_markers?: boolean;
+  risk_survival_duration?: number;
+  ping_fuzz_radius_meters?: number;
+  proximity_alert_meters?: number;
+  final_sprint_enabled?: boolean;
+}
 
 interface GameContextType {
   serverUrl: string;
@@ -17,14 +31,20 @@ interface GameContextType {
   setRole: (role: Role) => void;
   timerSeconds: number;
   timerTotal: number;
+  gameRemainingSeconds: number | null;
   timerPhase: 'HEAD_START' | 'HUNTING' | 'LOBBY';
   chasseReveals: ChasseReveal[];
   myLocation: { latitude: number; longitude: number } | null;
   createRoom: (hostName: string, role: Role) => Promise<string>;
   joinRoom: (roomCode: string, name: string, role: Role) => Promise<void>;
   startGame: () => void;
-  updateRoomConfig: (config: { reveal_interval?: number; role_mode?: RoleMode; max_hunters?: number }) => void;
+  endGameEarly: () => void;
+  updateRoomConfig: (config: RoomConfigUpdate) => void;
   changePlayerRole: (targetId: string, newRole: Role) => void;
+  transferHost: (targetId: string) => void;
+  resetScores: () => void;
+  takeRisk: () => void;
+  declareCapture: (hunterId?: string) => void;
   disconnect: () => void;
 }
 
@@ -44,7 +64,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [room, setRoom] = useState<Room | null>(null);
 
   const [timerSeconds, setTimerSeconds] = useState<number>(0);
-  const [timerTotal, setTimerTotal] = useState<number>(300);
+  const [timerTotal, setTimerTotal] = useState<number>(180);
+  const [gameRemainingSeconds, setGameRemainingSeconds] = useState<number | null>(null);
   const [timerPhase, setTimerPhase] = useState<'HEAD_START' | 'HUNTING' | 'LOBBY'>('LOBBY');
 
   const [chasseReveals, setChasseReveals] = useState<ChasseReveal[]>([]);
@@ -52,7 +73,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const wsRef = useRef<GameWebSocket | null>(null);
 
-  // Décompte local du chronomètre chaque seconde
+  // Décompte fluide local entre deux ticks serveur
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
     if (timerPhase !== 'LOBBY' && timerSeconds > 0) {
@@ -65,7 +86,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, [timerPhase, timerSeconds > 0]);
 
-  // Charger automatiquement l'URL active et l'historique des serveurs au démarrage
+  // Charger l'URL active et l'historique des serveurs au démarrage
   useEffect(() => {
     Promise.all([
       AsyncStorage.getItem(STORAGE_KEY_SERVER_URL),
@@ -112,22 +133,51 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     switch (action) {
       case 'ROOM_STATE':
         if (msg.payload) {
-          setRoom(msg.payload);
-          if (msg.payload.players && msg.payload.players[playerId]) {
-            setRole(msg.payload.players[playerId].role);
+          const roomData: Room = msg.payload;
+          setRoom(roomData);
+          if (roomData.players && roomData.players[playerId]) {
+            setRole(roomData.players[playerId].role);
           }
-          if (msg.payload.state && msg.payload.state !== 'LOBBY') {
-            setTimerPhase(msg.payload.state);
+          if (roomData.state === 'LOBBY') {
+            setTimerPhase('LOBBY');
+            setChasseReveals([]);
+            setGameRemainingSeconds(null);
+          } else if (roomData.state === 'HEAD_START' || roomData.state === 'HUNTING') {
+            setTimerPhase(roomData.state);
+            if (roomData.map_snapshot?.markers) {
+              setChasseReveals(roomData.map_snapshot.markers);
+            }
           }
         }
         break;
 
       case 'GAME_STARTED':
-        const duration = msg.payload?.head_start_duration || 300;
+        const duration = msg.payload?.head_start_duration || 120;
         setTimerPhase('HEAD_START');
         setTimerSeconds(duration);
         setTimerTotal(duration);
+        setChasseReveals([]); // Carte vide au lancement pendant le HEAD_START
+        if (msg.payload?.game_mode === 'TIMER') {
+          setGameRemainingSeconds(msg.payload?.game_duration_seconds || 1200);
+        } else {
+          setGameRemainingSeconds(null);
+        }
         setRoom((prev) => (prev ? { ...prev, state: 'HEAD_START' } : prev));
+        break;
+
+      case 'GAME_ENDED':
+        setTimerPhase('LOBBY');
+        setChasseReveals([]);
+        setGameRemainingSeconds(null);
+        setRoom((prev) =>
+          prev
+            ? {
+                ...prev,
+                state: 'LOBBY',
+                last_round_summary: msg.payload || prev.last_round_summary,
+              }
+            : prev
+        );
         break;
 
       case 'TIMER_TICK':
@@ -135,6 +185,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setTimerPhase(msg.payload.phase);
           setTimerSeconds(msg.payload.remaining_seconds);
           setTimerTotal(msg.payload.total_seconds);
+          if (typeof msg.payload.game_remaining_seconds === 'number') {
+            setGameRemainingSeconds(msg.payload.game_remaining_seconds);
+          } else {
+            setGameRemainingSeconds(null);
+          }
           if (msg.payload.phase) {
             setRoom((prev) => (prev ? { ...prev, state: msg.payload.phase } : prev));
           }
@@ -143,8 +198,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       case 'LOCATION_REVEAL':
       case 'HUNTED_POSITIONS_REVEAL':
-        const positions = msg.payload?.chasses || msg.hunted_positions || [];
-        setChasseReveals(positions);
+        const markers =
+          msg.payload?.markers ||
+          msg.payload?.chasses ||
+          msg.markers ||
+          msg.hunted_positions ||
+          [];
+        setChasseReveals(markers);
         break;
 
       case 'ERROR':
@@ -218,27 +278,47 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const startGame = () => {
-    if (wsRef.current) {
-      wsRef.current.send({ action: 'START_GAME' });
-    }
+    wsRef.current?.send({ action: 'START_GAME' });
   };
 
-  const updateRoomConfig = (config: { reveal_interval?: number; role_mode?: RoleMode; max_hunters?: number }) => {
-    if (wsRef.current) {
-      wsRef.current.send({
-        action: 'UPDATE_CONFIG',
-        payload: config,
-      });
-    }
+  const endGameEarly = () => {
+    wsRef.current?.send({ action: 'END_GAME_EARLY' });
+  };
+
+  const updateRoomConfig = (config: RoomConfigUpdate) => {
+    wsRef.current?.send({
+      action: 'UPDATE_CONFIG',
+      payload: config,
+    });
   };
 
   const changePlayerRole = (targetId: string, newRole: Role) => {
-    if (wsRef.current) {
-      wsRef.current.send({
-        action: 'CHANGE_PLAYER_ROLE',
-        payload: { target_id: targetId, role: newRole },
-      });
-    }
+    wsRef.current?.send({
+      action: 'CHANGE_PLAYER_ROLE',
+      payload: { target_id: targetId, role: newRole },
+    });
+  };
+
+  const transferHost = (targetId: string) => {
+    wsRef.current?.send({
+      action: 'TRANSFER_HOST',
+      payload: { target_id: targetId },
+    });
+  };
+
+  const resetScores = () => {
+    wsRef.current?.send({ action: 'RESET_SCORES' });
+  };
+
+  const takeRisk = () => {
+    wsRef.current?.send({ action: 'TAKE_RISK' });
+  };
+
+  const declareCapture = (hunterId?: string) => {
+    wsRef.current?.send({
+      action: 'DECLARE_CAPTURE',
+      payload: { hunter_id: hunterId },
+    });
   };
 
   const disconnect = () => {
@@ -249,6 +329,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     setRoom(null);
     setTimerPhase('LOBBY');
+    setChasseReveals([]);
+    setGameRemainingSeconds(null);
   };
 
   useEffect(() => {
@@ -272,14 +354,20 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setRole,
         timerSeconds,
         timerTotal,
+        gameRemainingSeconds,
         timerPhase,
         chasseReveals,
         myLocation,
         createRoom,
         joinRoom,
         startGame,
+        endGameEarly,
         updateRoomConfig,
         changePlayerRole,
+        transferHost,
+        resetScores,
+        takeRisk,
+        declareCapture,
         disconnect,
       }}
     >
