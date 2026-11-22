@@ -7,6 +7,7 @@ import {
   Modal,
   ScrollView,
 } from 'react-native';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useGame } from '../context/GameContext';
 import { TimerDisplay } from '../components/TimerDisplay';
 import { MapViewComponent } from '../components/MapViewComponent';
@@ -37,6 +38,7 @@ class MapErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState>
     if (this.state.hasError) {
       return (
         <View style={styles.errorContainer}>
+          <Ionicons name="map-outline" size={32} color="#FFDD57" style={{ marginBottom: 8 }} />
           <Text style={styles.errorTitle}>CHARGEMENT DE LA CARTE</Text>
           <Text style={styles.errorSub}>
             Affichage des coordonnées en cours d'initialisation...
@@ -45,6 +47,23 @@ class MapErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState>
       );
     }
     return this.props.children;
+  }
+}
+
+function getEventIcon(eventType?: string): { name: keyof typeof Ionicons.glyphMap; color: string } {
+  switch (eventType) {
+    case 'RISK_TAKEN':
+    case 'RISK_SURVIVED':
+      return { name: 'flash', color: '#FF9500' };
+    case 'PLAYER_CAPTURED':
+    case 'PLAYER_INFECTED':
+      return { name: 'alert-circle', color: '#FF3B30' };
+    case 'FIRST_PING':
+      return { name: 'radio', color: '#4DEEEA' };
+    case 'HOST_TRANSFERRED':
+      return { name: 'shield-checkmark', color: '#FFDD57' };
+    default:
+      return { name: 'information-circle', color: '#FFDD57' };
   }
 }
 
@@ -73,7 +92,6 @@ export const GameScreen: React.FC = () => {
   const isActiveHunted = role === 'CHASSE' && !isSpectator;
   const riskState = me?.risk_state;
 
-  // Synchroniser et décrémenter le compteur local de Prise de Risque
   useEffect(() => {
     if (riskState?.is_active && typeof riskState.remaining_seconds === 'number') {
       setRiskLocalCountdown(riskState.remaining_seconds);
@@ -100,6 +118,7 @@ export const GameScreen: React.FC = () => {
 
   const gameMode = room.config?.game_mode || 'TIMER';
   const anonymousMarkers = Boolean(room.config?.anonymous_markers);
+  const eventIcon = getEventIcon(room.last_event?.type);
 
   return (
     <View style={styles.container}>
@@ -107,10 +126,13 @@ export const GameScreen: React.FC = () => {
       <View style={styles.header}>
         <View style={styles.headerBadgeContainer}>
           <View>
-            <Text style={styles.roomCode}>ROOM: {room.code}</Text>
-            <Text style={styles.subStatusText}>
-              🏃 {activeHuntedCount} Chassé(s) en vie • ⭐ {me?.score_total || 0} pts
-            </Text>
+            <Text style={styles.roomCode}>ROOM {room.code}</Text>
+            <View style={styles.subStatusRow}>
+              <MaterialCommunityIcons name="run" size={14} color="#34C759" />
+              <Text style={styles.subStatusText}>{activeHuntedCount} en vie</Text>
+              <Ionicons name="star" size={13} color="#FFDD57" style={{ marginLeft: 10 }} />
+              <Text style={styles.subStatusText}>{me?.score_total || 0} pts</Text>
+            </View>
           </View>
 
           <View
@@ -123,12 +145,15 @@ export const GameScreen: React.FC = () => {
                 : styles.huntedBadge,
             ]}
           >
+            {isSpectator ? (
+              <Ionicons name="eye-outline" size={14} color="#FFFFFF" />
+            ) : role === 'CHASSEUR' ? (
+              <MaterialCommunityIcons name="crosshairs-gps" size={14} color="#FFFFFF" />
+            ) : (
+              <MaterialCommunityIcons name="run" size={14} color="#FFFFFF" />
+            )}
             <Text style={styles.roleText}>
-              {isSpectator
-                ? '👻 SPECTATEUR'
-                : role === 'CHASSEUR'
-                ? '🎯 CHASSEUR'
-                : '🏃 CHASSÉ'}
+              {isSpectator ? 'SPECTATEUR' : role === 'CHASSEUR' ? 'CHASSEUR' : 'CHASSÉ'}
             </Text>
           </View>
         </View>
@@ -136,8 +161,9 @@ export const GameScreen: React.FC = () => {
         {/* Alerte de proximité Chasseur */}
         {isActiveHunted && me?.proximity_alert && (
           <View style={styles.proximityAlertBanner}>
+            <MaterialCommunityIcons name="heart-pulse" size={16} color="#FFFFFF" />
             <Text style={styles.proximityAlertText}>
-              💓 ALERTE PROXIMITÉ : Un Chasseur est tout proche !
+              ALERTE PROXIMITÉ : Un Chasseur est proche !
             </Text>
           </View>
         )}
@@ -145,6 +171,12 @@ export const GameScreen: React.FC = () => {
         {/* Dernier événement en direct */}
         {room.last_event?.message && (
           <View style={styles.eventBanner}>
+            <Ionicons
+              name={eventIcon.name}
+              size={14}
+              color={eventIcon.color}
+              style={{ marginRight: 6 }}
+            />
             <Text style={styles.eventBannerText} numberOfLines={1}>
               {room.last_event.message}
             </Text>
@@ -164,6 +196,7 @@ export const GameScreen: React.FC = () => {
       <View style={styles.mapContainer}>
         <MapErrorBoundary>
           <MapViewComponent
+            myPlayerId={playerId}
             role={role}
             gameState={room.state}
             myLocation={myLocation}
@@ -186,19 +219,42 @@ export const GameScreen: React.FC = () => {
             disabled={Boolean(riskState?.used_in_current_ping_cycle || riskState?.is_active)}
             onPress={takeRisk}
           >
-            <Text style={styles.riskButtonTitle}>
+            <View style={styles.actionBtnHeader}>
+              <Ionicons
+                name="flash"
+                size={14}
+                color={
+                  riskState?.used_in_current_ping_cycle && !riskState?.is_active
+                    ? '#A0A0B0'
+                    : '#12121C'
+                }
+              />
+              <Text
+                style={[
+                  styles.riskButtonTitle,
+                  riskState?.used_in_current_ping_cycle &&
+                    !riskState?.is_active && { color: '#A0A0B0' },
+                ]}
+              >
+                {riskState?.is_active
+                  ? `SURVIE : ${riskLocalCountdown}s`
+                  : riskState?.used_in_current_ping_cycle
+                  ? 'RISQUE UTILISÉ'
+                  : 'PRISE DE RISQUE'}
+              </Text>
+            </View>
+            <Text
+              style={[
+                styles.riskButtonSub,
+                riskState?.used_in_current_ping_cycle &&
+                  !riskState?.is_active && { color: '#7A7A90' },
+              ]}
+            >
               {riskState?.is_active
-                ? `⚡ SURVIE : ${riskLocalCountdown}s`
-                : riskState?.used_in_current_ping_cycle
-                ? '⚡ RISQUE UTILISÉ'
-                : '⚡ PRISE DE RISQUE'}
-            </Text>
-            <Text style={styles.riskButtonSub}>
-              {riskState?.is_active
-                ? 'Survivez pour +80 pts !'
+                ? 'Survivez pour +80 pts'
                 : riskState?.used_in_current_ping_cycle
                 ? 'Dispo au prochain ping'
-                : 'Révèle votre position (+80 pts)'}
+                : 'Révèle position (+80 pts)'}
             </Text>
           </TouchableOpacity>
 
@@ -206,7 +262,10 @@ export const GameScreen: React.FC = () => {
             style={styles.capturedButton}
             onPress={() => setCaptureModalVisible(true)}
           >
-            <Text style={styles.capturedButtonTitle}>🚨 J'AI ÉTÉ TROUVÉ</Text>
+            <View style={styles.actionBtnHeader}>
+              <Ionicons name="flag" size={14} color="#FFFFFF" />
+              <Text style={styles.capturedButtonTitle}>J'AI ÉTÉ TROUVÉ</Text>
+            </View>
             <Text style={styles.capturedButtonSub}>Déclarer ma capture</Text>
           </TouchableOpacity>
         </View>
@@ -215,8 +274,9 @@ export const GameScreen: React.FC = () => {
       {/* Bandeau Spectateur si éliminé en mode Timer */}
       {isSpectator && (
         <View style={styles.spectatorBanner}>
+          <Ionicons name="eye-outline" size={16} color="#9E9CFF" style={{ marginRight: 8 }} />
           <Text style={styles.spectatorBannerText}>
-            👻 Vous avez été capturé ({me?.captured_by || 'Chasseur'}). Vous suivez la fin de manche en Spectateur.
+            Capturé par {me?.captured_by || 'Chasseur'}. Mode Spectateur jusqu'à la fin de la manche.
           </Text>
         </View>
       )}
@@ -225,11 +285,13 @@ export const GameScreen: React.FC = () => {
       <View style={styles.footerRow}>
         {isHost && (
           <TouchableOpacity style={styles.abortButton} onPress={endGameEarly}>
-            <Text style={styles.abortButtonText}>⏹ ARRÊTER LA MANCHE</Text>
+            <Ionicons name="stop-circle-outline" size={16} color="#FF9500" />
+            <Text style={styles.abortButtonText}>ARRÊTER</Text>
           </TouchableOpacity>
         )}
 
         <TouchableOpacity style={styles.quitButton} onPress={disconnect}>
+          <Ionicons name="exit-outline" size={16} color="#FF3B30" />
           <Text style={styles.quitButtonText}>QUITTER LA ROOM</Text>
         </TouchableOpacity>
       </View>
@@ -243,9 +305,12 @@ export const GameScreen: React.FC = () => {
       >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>🚨 QUI VOUS A TROUVÉ ?</Text>
+            <View style={styles.modalTitleRow}>
+              <Ionicons name="flag" size={20} color="#FF3B30" style={{ marginRight: 8 }} />
+              <Text style={styles.modalTitle}>QUI VOUS A TROUVÉ ?</Text>
+            </View>
             <Text style={styles.modalSubtitle}>
-              Sélectionnez le chasseur qui vous a attrapé pour lui attribuer les points de capture :
+              Sélectionnez le chasseur qui vous a attrapé pour lui attribuer les points :
             </Text>
 
             <ScrollView style={styles.hunterModalList}>
@@ -259,8 +324,11 @@ export const GameScreen: React.FC = () => {
                       declareCapture(hunter.id);
                     }}
                   >
-                    <Text style={styles.hunterSelectName}>🎯 {hunter.name}</Text>
-                    <Text style={styles.hunterSelectAction}>Sélectionner →</Text>
+                    <View style={styles.hunterSelectLeft}>
+                      <MaterialCommunityIcons name="crosshairs-gps" size={18} color="#FF3B30" />
+                      <Text style={styles.hunterSelectName}>{hunter.name}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color="#FFDD57" />
                   </TouchableOpacity>
                 ))
               ) : (
@@ -271,8 +339,8 @@ export const GameScreen: React.FC = () => {
                     declareCapture(undefined);
                   }}
                 >
-                  <Text style={styles.hunterSelectName}>Confirmer ma capture (Solo / Test)</Text>
-                  <Text style={styles.hunterSelectAction}>Valider →</Text>
+                  <Text style={styles.hunterSelectName}>Confirmer ma capture (Solo)</Text>
+                  <Ionicons name="checkmark" size={18} color="#FFDD57" />
                 </TouchableOpacity>
               )}
             </ScrollView>
@@ -313,13 +381,20 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1.5,
   },
+  subStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
   subStatusText: {
     color: '#A0A0B0',
     fontSize: 12,
     fontWeight: '600',
-    marginTop: 2,
+    marginLeft: 4,
   },
   roleBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
@@ -337,21 +412,27 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontWeight: 'bold',
     fontSize: 12,
+    marginLeft: 5,
   },
   proximityAlertBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#FF3B30',
     paddingVertical: 6,
     paddingHorizontal: 12,
     borderRadius: 8,
     marginVertical: 3,
-    alignItems: 'center',
   },
   proximityAlertText: {
     color: '#FFFFFF',
     fontWeight: '900',
     fontSize: 12,
+    marginLeft: 6,
   },
   eventBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: '#252538',
     paddingVertical: 5,
     paddingHorizontal: 10,
@@ -364,6 +445,7 @@ const styles = StyleSheet.create({
     color: '#E0E0E0',
     fontSize: 11,
     fontWeight: '600',
+    flex: 1,
   },
   mapContainer: {
     flex: 1,
@@ -373,6 +455,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: 8,
+  },
+  actionBtnHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   riskButton: {
     flex: 0.49,
@@ -388,12 +474,13 @@ const styles = StyleSheet.create({
   },
   riskButtonDisabled: {
     backgroundColor: '#2E2E42',
-    opacity: 0.75,
+    opacity: 0.8,
   },
   riskButtonTitle: {
     color: '#12121C',
     fontWeight: '900',
     fontSize: 12,
+    marginLeft: 5,
   },
   riskButtonSub: {
     color: '#1E1E2C',
@@ -414,6 +501,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '900',
     fontSize: 12,
+    marginLeft: 5,
   },
   capturedButtonSub: {
     color: '#FFE5E5',
@@ -422,6 +510,9 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   spectatorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#1E1E2C',
     padding: 10,
     borderRadius: 10,
@@ -432,18 +523,20 @@ const styles = StyleSheet.create({
   spectatorBannerText: {
     color: '#D0D0E0',
     fontSize: 11,
-    textAlign: 'center',
+    flexShrink: 1,
   },
   footerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
   abortButton: {
-    flex: 0.48,
+    flex: 0.46,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
     backgroundColor: '#2A2A3D',
     paddingVertical: 12,
     borderRadius: 12,
-    alignItems: 'center',
     borderWidth: 1,
     borderColor: '#FF9500',
     marginRight: 8,
@@ -452,13 +545,16 @@ const styles = StyleSheet.create({
     color: '#FF9500',
     fontWeight: 'bold',
     fontSize: 12,
+    marginLeft: 6,
   },
   quitButton: {
     flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
     backgroundColor: '#2A2A3D',
     paddingVertical: 12,
     borderRadius: 12,
-    alignItems: 'center',
     borderWidth: 1,
     borderColor: '#3A3A55',
   },
@@ -466,6 +562,7 @@ const styles = StyleSheet.create({
     color: '#FF3B30',
     fontWeight: 'bold',
     fontSize: 12,
+    marginLeft: 6,
   },
   modalBackdrop: {
     flex: 1,
@@ -482,12 +579,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#FF3B30',
   },
+  modalTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
   modalTitle: {
     color: '#FFDD57',
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '900',
-    textAlign: 'center',
-    marginBottom: 6,
   },
   modalSubtitle: {
     color: '#A0A0B0',
@@ -511,15 +612,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#FF3B30',
   },
+  hunterSelectLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   hunterSelectName: {
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: 'bold',
-  },
-  hunterSelectAction: {
-    color: '#FFDD57',
-    fontSize: 12,
-    fontWeight: 'bold',
+    marginLeft: 10,
   },
   modalCancelBtn: {
     paddingVertical: 12,

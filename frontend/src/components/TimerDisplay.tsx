@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { GameMode } from '../types/game';
 
 interface Props {
@@ -26,8 +27,8 @@ export const TimerDisplay: React.FC<Props> = ({
   };
 
   const getPhaseTitle = () => {
-    if (phase === 'HEAD_START') return 'AVANCE DES CHASSÉS (1er PING DANS)';
-    if (phase === 'HUNTING') return 'PROCHAIN PING GPS DANS';
+    if (phase === 'HEAD_START') return 'AVANCE CHASSÉS (1ER PING)';
+    if (phase === 'HUNTING') return 'PROCHAIN PING GPS';
     return 'LOBBY EN ATTENTE';
   };
 
@@ -46,7 +47,10 @@ export const TimerDisplay: React.FC<Props> = ({
         {gameMode === 'INFECTED' ? (
           <>
             <Text style={styles.secondaryLabel}>MODE DE JEU</Text>
-            <Text style={styles.infectedModeText}>🧟 INFECTÉ</Text>
+            <View style={styles.infectedRow}>
+              <MaterialCommunityIcons name="biohazard" size={18} color="#FF9500" />
+              <Text style={styles.infectedModeText}>INFECTÉ</Text>
+            </View>
           </>
         ) : (
           <>
@@ -67,7 +71,7 @@ const styles = StyleSheet.create({
   container: {
     backgroundColor: '#1E1E2C',
     paddingVertical: 10,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     borderRadius: 16,
     flexDirection: 'row',
     alignItems: 'center',
@@ -120,10 +124,15 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontVariant: ['tabular-nums'],
   },
+  infectedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
   infectedModeText: {
     color: '#FF9500',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '900',
-    marginTop: 4,
+    marginLeft: 5,
   },
 });

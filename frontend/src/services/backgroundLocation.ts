@@ -13,6 +13,38 @@ let activeConfig: {
 
 let foregroundSubscription: Location.LocationSubscription | null = null;
 
+function toHttpUrl(rawUrl: string): string {
+  let httpUrl = rawUrl.trim().replace(/\/+$/, '');
+  if (httpUrl.startsWith('wss://')) httpUrl = httpUrl.replace(/^wss:\/\//, 'https://');
+  else if (httpUrl.startsWith('ws://')) httpUrl = httpUrl.replace(/^ws:\/\//, 'http://');
+  else if (!httpUrl.startsWith('http://') && !httpUrl.startsWith('https://')) {
+    httpUrl = `https://${httpUrl}`;
+  }
+  return httpUrl;
+}
+
+export async function postLocationHttpFallback(
+  roomCode: string,
+  playerId: string,
+  serverUrl: string,
+  latitude: number,
+  longitude: number
+): Promise<void> {
+  try {
+    const httpUrl = toHttpUrl(serverUrl);
+    await fetch(
+      `${httpUrl}/api/rooms/${roomCode}/location?player_id=${encodeURIComponent(playerId)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ latitude, longitude }),
+      }
+    );
+  } catch {
+    // Silencieux en cas de perte réseau temporaire
+  }
+}
+
 export const setBackgroundLocationConfig = (
   roomCode: string,
   playerId: string,
@@ -22,7 +54,7 @@ export const setBackgroundLocationConfig = (
   activeConfig = { roomCode, playerId, serverUrl, onLocationUpdate };
 };
 
-// 1. Définition blindée au premier niveau de fichier (scope global Headless JS)
+// Définition blindée au premier niveau de fichier (scope global Headless JS)
 TaskManager.defineTask(LOCATION_TASK_NAME, async (taskBody) => {
   try {
     const { data, error } = taskBody || {};
@@ -51,33 +83,27 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async (taskBody) => {
     }
 
     if (activeConfig) {
-      console.log(`[BackgroundLocation] GPS arrière-plan: ${latitude}, ${longitude}`);
-
       if (activeConfig.onLocationUpdate) {
         activeConfig.onLocationUpdate(latitude, longitude);
       }
 
-      // Envoi synchrone de secours en HTTP
-      let httpUrl = activeConfig.serverUrl.trim().replace(/\/+$/, '');
-      if (httpUrl.startsWith('wss://')) httpUrl = httpUrl.replace(/^wss:\/\//, 'https://');
-      else if (httpUrl.startsWith('ws://')) httpUrl = httpUrl.replace(/^ws:\/\//, 'http://');
-      else if (!httpUrl.startsWith('http://') && !httpUrl.startsWith('https://')) httpUrl = `https://${httpUrl}`;
-
-      await fetch(`${httpUrl}/api/rooms/${activeConfig.roomCode}/location?player_id=${activeConfig.playerId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          latitude,
-          longitude,
-        }),
-      }).catch(() => {});
+      await postLocationHttpFallback(
+        activeConfig.roomCode,
+        activeConfig.playerId,
+        activeConfig.serverUrl,
+        latitude,
+        longitude
+      );
     }
   } catch (err) {
     console.warn('[BackgroundLocation] TaskManager error caught safely:', err);
   }
 });
 
-export async function requestLocationPermissions(): Promise<{ foreground: boolean; background: boolean }> {
+export async function requestLocationPermissions(): Promise<{
+  foreground: boolean;
+  background: boolean;
+}> {
   try {
     const { status: fg } = await Location.requestForegroundPermissionsAsync();
     if (fg !== 'granted') {
@@ -106,12 +132,21 @@ export async function startBackgroundLocationUpdates(
     return false;
   }
 
-  // 1. Toujours activer le watcher de premier plan (sur et sans crash)
+  // 1. Acquisition immédiate + watcher de premier plan haute précision
   try {
-    const initialLoc = await Location.getLastKnownPositionAsync();
-    if (initialLoc?.coords) {
-      onLocationUpdate?.(initialLoc.coords.latitude, initialLoc.coords.longitude);
+    const lastKnown = await Location.getLastKnownPositionAsync();
+    if (lastKnown?.coords) {
+      onLocationUpdate?.(lastKnown.coords.latitude, lastKnown.coords.longitude);
     }
+
+    // Demande de fix GPS actif en parallèle sans bloquer le démarrage du watcher
+    Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+      .then((curr) => {
+        if (curr?.coords) {
+          onLocationUpdate?.(curr.coords.latitude, curr.coords.longitude);
+        }
+      })
+      .catch(() => {});
 
     if (foregroundSubscription) {
       foregroundSubscription.remove();
@@ -132,18 +167,18 @@ export async function startBackgroundLocationUpdates(
     console.warn('[Location] Foreground watch position warning:', e);
   }
 
-  // 2. Tenter d'activer la tâche d'arrière-plan si la permission est accordée
+  // 2. Tâche d'arrière-plan si la permission est accordée
   if (permissions.background) {
     try {
       const isRegistered = await TaskManager.isTaskRegisteredAsync(LOCATION_TASK_NAME);
       if (!isRegistered) {
         const options: Location.LocationTaskOptions = {
           accuracy: Location.Accuracy.High,
-          distanceInterval: 10,
+          distanceInterval: 5,
           timeInterval: 5000,
           foregroundService: {
             notificationTitle: 'ManHunt - GPS Actif',
-            notificationBody: 'Transmet votre position aux chasseurs en arrière-plan.',
+            notificationBody: 'Synchronisation de votre position GPS pendant la partie.',
             notificationColor: '#FF3B30',
           },
         };

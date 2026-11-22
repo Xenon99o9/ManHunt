@@ -8,9 +8,11 @@ import {
   TouchableOpacity,
   LayoutChangeEvent,
 } from 'react-native';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Role, GameState, ChasseReveal } from '../types/game';
 
 interface Props {
+  myPlayerId: string;
   role: Role;
   gameState: GameState;
   myLocation: { latitude: number; longitude: number } | null;
@@ -69,6 +71,7 @@ function getDistanceMeters(
 }
 
 export const MapViewComponent: React.FC<Props> = ({
+  myPlayerId,
   gameState,
   myLocation,
   chasseReveals,
@@ -188,17 +191,18 @@ export const MapViewComponent: React.FC<Props> = ({
     }
   }
 
-  // Marqueurs figés du dernier ping (visibles pour TOUS les joueurs en phase HUNTING)
-  const validSnapshotMarkers = (chasseReveals || []).filter(
+  // Marqueurs figés des AUTRES participants (uniquement hors soi-même)
+  const otherPlayersMarkers = (chasseReveals || []).filter(
     (m) =>
       m &&
+      m.player_id !== myPlayerId &&
       typeof m.latitude === 'number' &&
       typeof m.longitude === 'number' &&
       !isNaN(m.latitude) &&
       !isNaN(m.longitude)
   );
 
-  // Position personnelle en direct (couleur distincte Cyan #00E5FF)
+  // Position personnelle en direct (Bleu Cyan #00E5FF)
   const myScreenPos =
     hasValidMyLocation && myLocation
       ? {
@@ -213,7 +217,8 @@ export const MapViewComponent: React.FC<Props> = ({
 
   return (
     <View style={styles.container} onLayout={handleLayout}>
-      <View style={styles.mapSurface} {...panResponder.panHandlers}>
+      {/* CALQUE 1 : Surface de tuiles OpenStreetMap + gestion tactile */}
+      <View style={styles.tilesLayer} {...panResponder.panHandlers}>
         {tiles.map((tile) => (
           <Image
             key={tile.key}
@@ -231,10 +236,12 @@ export const MapViewComponent: React.FC<Props> = ({
             resizeMode="cover"
           />
         ))}
+      </View>
 
-        {/* Marqueurs figés issus du dernier Ping GPS ou d'une Prise de Risque */}
+      {/* CALQUE 2 : Marqueurs isolés au-dessus des tuiles (évite toute disparition sous Android) */}
+      <View style={styles.markersLayer} pointerEvents="none">
         {gameState === 'HUNTING' &&
-          validSnapshotMarkers.map((marker, index) => {
+          otherPlayersMarkers.map((marker, index) => {
             const screenLeft =
               viewport.width / 2 +
               (lonToWorldX(Number(marker.longitude), zoom) - centerWorldX);
@@ -273,34 +280,55 @@ export const MapViewComponent: React.FC<Props> = ({
 
             const labelTitle = anonymousMarkers
               ? isRiskMarker
-                ? '⚡ Risque'
+                ? 'Risque'
                 : isHunterMarker
                 ? 'Chasseur'
                 : 'Chassé'
-              : `${isRiskMarker ? '⚡ ' : ''}${
-                  marker.display_name || marker.player_name || (isHunterMarker ? 'Chasseur' : 'Chassé')
-                }${distanceMeters !== null ? ` • ${distanceMeters}m` : ''}`;
+              : `${marker.display_name || marker.player_name || (isHunterMarker ? 'Chasseur' : 'Chassé')}${
+                  distanceMeters !== null ? ` • ${distanceMeters}m` : ''
+                }`;
 
             return (
               <View
-                key={`${marker.player_id || index}_${marker.source || 'PING'}`}
-                pointerEvents="none"
+                key={`marker_${marker.player_id || index}`}
                 style={[
-                  styles.markerWrapper,
+                  styles.pinAnchor,
                   {
                     left: screenLeft,
                     top: screenTop,
                   },
                 ]}
               >
+                {/* Bulle positionnée exactement au-dessus du point, sans déplacer l'ancrage GPS */}
                 <View style={[styles.calloutBox, { borderColor: pinColor }]}>
-                  <Text style={styles.calloutTitle} numberOfLines={1}>
-                    {labelTitle}
-                  </Text>
+                  <View style={styles.calloutTitleRow}>
+                    {isRiskMarker ? (
+                      <Ionicons name="flash" size={11} color="#FF9500" style={styles.calloutIcon} />
+                    ) : isHunterMarker ? (
+                      <MaterialCommunityIcons
+                        name="crosshairs-gps"
+                        size={11}
+                        color="#FF3B30"
+                        style={styles.calloutIcon}
+                      />
+                    ) : (
+                      <MaterialCommunityIcons
+                        name="run"
+                        size={11}
+                        color="#34C759"
+                        style={styles.calloutIcon}
+                      />
+                    )}
+                    <Text style={styles.calloutTitle} numberOfLines={1}>
+                      {labelTitle}
+                    </Text>
+                  </View>
                   {!anonymousMarkers && formattedTime ? (
                     <Text style={styles.calloutSub}>Ping {formattedTime}</Text>
                   ) : null}
                 </View>
+
+                {/* Point exact centré sur la coordonnée GPS */}
                 <View style={[styles.pinOuter, { backgroundColor: pinColor }]}>
                   <View style={styles.pinInner} />
                 </View>
@@ -308,12 +336,11 @@ export const MapViewComponent: React.FC<Props> = ({
             );
           })}
 
-        {/* Point personnel en DIRECT (Cyan #00E5FF distinct des pings figés) */}
+        {/* Point personnel en DIRECT (Bleu Cyan #00E5FF) */}
         {myScreenPos && (
           <View
-            pointerEvents="none"
             style={[
-              styles.myMarkerWrapper,
+              styles.myMarkerAnchor,
               {
                 left: myScreenPos.left,
                 top: myScreenPos.top,
@@ -326,70 +353,77 @@ export const MapViewComponent: React.FC<Props> = ({
         )}
       </View>
 
-      {/* Barre supérieure : Légende + Navigation entre les points du dernier Ping */}
-      <View style={styles.topInfoBar} pointerEvents="box-none">
-        <View style={styles.legendPill}>
-          <View style={[styles.legendDot, { backgroundColor: '#00E5FF' }]} />
-          <Text style={styles.legendText}>Moi (Direct)</Text>
-          <View style={[styles.legendDot, { backgroundColor: '#34C759', marginLeft: 8 }]} />
-          <Text style={styles.legendText}>Chassé</Text>
-          <View style={[styles.legendDot, { backgroundColor: '#FF3B30', marginLeft: 8 }]} />
-          <Text style={styles.legendText}>Chasseur</Text>
+      {/* CALQUE 3 : HUD & Contrôles */}
+      <View style={styles.hudLayer} pointerEvents="box-none">
+        {/* Légende + Bouton de focus sur les pings */}
+        <View style={styles.topInfoBar} pointerEvents="box-none">
+          <View style={styles.legendPill}>
+            <View style={[styles.legendDot, { backgroundColor: '#00E5FF' }]} />
+            <Text style={styles.legendText}>Moi</Text>
+            <View style={[styles.legendDot, { backgroundColor: '#34C759', marginLeft: 8 }]} />
+            <Text style={styles.legendText}>Chassé</Text>
+            <View style={[styles.legendDot, { backgroundColor: '#FF3B30', marginLeft: 8 }]} />
+            <Text style={styles.legendText}>Chasseur</Text>
+          </View>
+
+          {gameState === 'HUNTING' && otherPlayersMarkers.length > 0 && (
+            <TouchableOpacity
+              style={styles.targetFocusPill}
+              onPress={() => {
+                const nextIdx = targetIndex % otherPlayersMarkers.length;
+                const target = otherPlayersMarkers[nextIdx];
+                setTargetIndex(nextIdx + 1);
+                setFollowUser(false);
+                setCenterCoord({
+                  lat: Number(target.latitude),
+                  lon: Number(target.longitude),
+                });
+                setDragOffset({ dx: 0, dy: 0 });
+              }}
+            >
+              <MaterialCommunityIcons name="crosshairs-gps" size={14} color="#12121C" />
+              <Text style={styles.targetFocusText}>Ping ({otherPlayersMarkers.length})</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
-        {gameState === 'HUNTING' && validSnapshotMarkers.length > 0 && (
-          <TouchableOpacity
-            style={styles.targetFocusPill}
-            onPress={() => {
-              const nextIdx = targetIndex % validSnapshotMarkers.length;
-              const target = validSnapshotMarkers[nextIdx];
-              setTargetIndex(nextIdx + 1);
-              setFollowUser(false);
-              setCenterCoord({
-                lat: Number(target.latitude),
-                lon: Number(target.longitude),
-              });
-              setDragOffset({ dx: 0, dy: 0 });
-            }}
-          >
-            <Text style={styles.targetFocusText}>
-              🎯 Ping ({validSnapshotMarkers.length})
+        {/* Bandeau d'information pendant l'avance */}
+        {gameState === 'HEAD_START' && (
+          <View style={styles.headStartBanner} pointerEvents="none">
+            <Ionicons name="time-outline" size={14} color="#FFDD57" style={{ marginRight: 6 }} />
+            <Text style={styles.headStartBannerText}>
+              Période d'avance : positions révélées au 1er Ping GPS
             </Text>
-          </TouchableOpacity>
+          </View>
         )}
-      </View>
 
-      {/* Bandeau d'information pendant l'avance (Carte non verrouillée mais vide de pings) */}
-      {gameState === 'HEAD_START' && (
-        <View style={styles.headStartBanner} pointerEvents="none">
-          <Text style={styles.headStartBannerText}>
-            ⏳ Période d'avance : les positions seront révélées au 1er Ping GPS
+        {/* Contrôles de Zoom et Recentrage */}
+        <View style={styles.controlsColumn} pointerEvents="box-none">
+          <TouchableOpacity style={styles.controlButton} onPress={handleZoomIn}>
+            <Ionicons name="add" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.controlButton} onPress={handleZoomOut}>
+            <Ionicons name="remove" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.controlButton, followUser && styles.controlButtonActive]}
+            onPress={handleRecenter}
+          >
+            <Ionicons
+              name="locate"
+              size={20}
+              color={followUser ? '#00E5FF' : '#FFFFFF'}
+            />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.attributionBox} pointerEvents="none">
+          <Text style={styles.attributionText}>
+            OpenStreetMap • Zoom {zoom}/19
           </Text>
         </View>
-      )}
-
-      {/* Contrôles de Zoom et Recentrage GPS */}
-      <View style={styles.controlsColumn} pointerEvents="box-none">
-        <TouchableOpacity style={styles.controlButton} onPress={handleZoomIn}>
-          <Text style={styles.controlButtonText}>＋</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.controlButton} onPress={handleZoomOut}>
-          <Text style={styles.controlButtonText}>－</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.controlButton, followUser && styles.controlButtonActive]}
-          onPress={handleRecenter}
-        >
-          <Text style={styles.controlButtonText}>📍</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.attributionBox} pointerEvents="none">
-        <Text style={styles.attributionText}>
-          © OpenStreetMap • Zoom {zoom}/19 • Pings figés
-        </Text>
       </View>
     </View>
   );
@@ -405,20 +439,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#2E2E42',
   },
-  mapSurface: {
-    flex: 1,
-    width: '100%',
-    height: '100%',
-    position: 'relative',
-    overflow: 'hidden',
+  tilesLayer: {
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: '#E5E3DF',
+    zIndex: 1,
   },
   tile: {
     position: 'absolute',
     width: TILE_SIZE,
     height: TILE_SIZE,
   },
-  myMarkerWrapper: {
+  markersLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 10,
+    elevation: 10,
+  },
+  hudLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 20,
+    elevation: 20,
+  },
+  myMarkerAnchor: {
     position: 'absolute',
     width: 36,
     height: 36,
@@ -426,7 +467,7 @@ const styles = StyleSheet.create({
     marginTop: -18,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 8,
+    zIndex: 15,
   },
   myPulseRing: {
     position: 'absolute',
@@ -443,24 +484,36 @@ const styles = StyleSheet.create({
     backgroundColor: '#00E5FF',
     borderWidth: 3,
     borderColor: '#FFFFFF',
-    elevation: 5,
   },
-  markerWrapper: {
+  pinAnchor: {
     position: 'absolute',
-    width: 160,
-    marginLeft: -80,
-    marginTop: -56,
+    width: 24,
+    height: 24,
+    marginLeft: -12,
+    marginTop: -12,
+    justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 6,
+    overflow: 'visible',
+    zIndex: 12,
   },
   calloutBox: {
-    backgroundColor: 'rgba(18, 18, 28, 0.92)',
+    position: 'absolute',
+    bottom: 26,
+    minWidth: 90,
+    maxWidth: 170,
+    backgroundColor: 'rgba(18, 18, 28, 0.94)',
     paddingHorizontal: 8,
-    paddingVertical: 3,
+    paddingVertical: 4,
     borderRadius: 8,
     borderWidth: 1.5,
-    marginBottom: 3,
     alignItems: 'center',
+  },
+  calloutTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  calloutIcon: {
+    marginRight: 4,
   },
   calloutTitle: {
     color: '#FFFFFF',
@@ -470,16 +523,16 @@ const styles = StyleSheet.create({
   calloutSub: {
     color: '#A0A0B0',
     fontSize: 9,
+    marginTop: 1,
   },
   pinOuter: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 2.5,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 3,
     borderColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 4,
   },
   pinInner: {
     width: 6,
@@ -495,12 +548,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    zIndex: 9,
   },
   legendPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(18, 18, 28, 0.88)',
+    backgroundColor: 'rgba(18, 18, 28, 0.9)',
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 12,
@@ -519,6 +571,8 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   targetFocusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: '#FFDD57',
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -528,37 +582,39 @@ const styles = StyleSheet.create({
     color: '#12121C',
     fontSize: 11,
     fontWeight: '900',
+    marginLeft: 4,
   },
   headStartBanner: {
     position: 'absolute',
     bottom: 32,
-    left: 14,
+    left: 12,
     right: 64,
-    backgroundColor: 'rgba(18, 18, 28, 0.9)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(18, 18, 28, 0.92)',
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#FFDD57',
-    zIndex: 9,
   },
   headStartBannerText: {
     color: '#FFDD57',
     fontSize: 11,
     fontWeight: 'bold',
-    textAlign: 'center',
+    flexShrink: 1,
   },
   controlsColumn: {
     position: 'absolute',
     right: 10,
     bottom: 28,
-    zIndex: 9,
   },
   controlButton: {
     width: 42,
     height: 42,
     borderRadius: 12,
-    backgroundColor: 'rgba(18, 18, 28, 0.88)',
+    backgroundColor: 'rgba(18, 18, 28, 0.9)',
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 8,
@@ -567,12 +623,7 @@ const styles = StyleSheet.create({
   },
   controlButtonActive: {
     borderColor: '#00E5FF',
-    backgroundColor: 'rgba(26, 46, 53, 0.95)',
-  },
-  controlButtonText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: 'bold',
+    backgroundColor: 'rgba(20, 40, 50, 0.95)',
   },
   attributionBox: {
     position: 'absolute',
@@ -582,7 +633,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
-    zIndex: 7,
   },
   attributionText: {
     color: '#A0A0B0',

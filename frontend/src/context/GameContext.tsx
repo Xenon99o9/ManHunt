@@ -2,7 +2,11 @@ import React, { createContext, useContext, useState, useEffect, useRef } from 'r
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Room, Role, ChasseReveal, RoleMode, GameMode } from '../types/game';
 import { GameWebSocket } from '../services/websocket';
-import { startBackgroundLocationUpdates, stopBackgroundLocationUpdates } from '../services/backgroundLocation';
+import {
+  startBackgroundLocationUpdates,
+  stopBackgroundLocationUpdates,
+  postLocationHttpFallback,
+} from '../services/backgroundLocation';
 
 export interface RoomConfigUpdate {
   game_mode?: GameMode;
@@ -35,8 +39,8 @@ interface GameContextType {
   timerPhase: 'HEAD_START' | 'HUNTING' | 'LOBBY';
   chasseReveals: ChasseReveal[];
   myLocation: { latitude: number; longitude: number } | null;
-  createRoom: (hostName: string, role: Role) => Promise<string>;
-  joinRoom: (roomCode: string, name: string, role: Role) => Promise<void>;
+  createRoom: (hostName: string) => Promise<string>;
+  joinRoom: (roomCode: string, name: string) => Promise<void>;
   startGame: () => void;
   endGameEarly: () => void;
   updateRoomConfig: (config: RoomConfigUpdate) => void;
@@ -72,19 +76,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [myLocation, setMyLocation] = useState<{ latitude: number; longitude: number } | null>(null);
 
   const wsRef = useRef<GameWebSocket | null>(null);
-
-  // Décompte fluide local entre deux ticks serveur
-  useEffect(() => {
-    let interval: NodeJS.Timeout | null = null;
-    if (timerPhase !== 'LOBBY' && timerSeconds > 0) {
-      interval = setInterval(() => {
-        setTimerSeconds((prev) => Math.max(0, prev - 1));
-      }, 1000);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [timerPhase, timerSeconds > 0]);
+  const latestLocationRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  const latestPlayerNameRef = useRef<string>('');
+  const latestPingCycleRef = useRef<number>(0);
 
   // Charger l'URL active et l'historique des serveurs au démarrage
   useEffect(() => {
@@ -97,7 +91,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (savedHistory) {
           try {
             setServerHistory(JSON.parse(savedHistory));
-          } catch (e) {}
+          } catch {}
         }
       })
       .catch(() => {});
@@ -139,24 +133,33 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setRole(roomData.players[playerId].role);
           }
           if (roomData.state === 'LOBBY') {
+            latestPingCycleRef.current = 0;
             setTimerPhase('LOBBY');
             setChasseReveals([]);
             setGameRemainingSeconds(null);
-          } else if (roomData.state === 'HEAD_START' || roomData.state === 'HUNTING') {
-            setTimerPhase(roomData.state);
-            if (roomData.map_snapshot?.markers) {
-              setChasseReveals(roomData.map_snapshot.markers);
+          } else if (roomData.state === 'HEAD_START') {
+            latestPingCycleRef.current = 0;
+            setTimerPhase('HEAD_START');
+            setChasseReveals([]);
+          } else if (roomData.state === 'HUNTING') {
+            setTimerPhase('HUNTING');
+            const snapCycle = roomData.map_snapshot?.ping_cycle_index ?? 0;
+            const snapMarkers = roomData.map_snapshot?.markers;
+            if (Array.isArray(snapMarkers) && snapMarkers.length > 0 && snapCycle >= latestPingCycleRef.current) {
+              latestPingCycleRef.current = snapCycle;
+              setChasseReveals(snapMarkers);
             }
           }
         }
         break;
 
-      case 'GAME_STARTED':
+      case 'GAME_STARTED': {
         const duration = msg.payload?.head_start_duration || 120;
+        latestPingCycleRef.current = 0;
         setTimerPhase('HEAD_START');
         setTimerSeconds(duration);
         setTimerTotal(duration);
-        setChasseReveals([]); // Carte vide au lancement pendant le HEAD_START
+        setChasseReveals([]);
         if (msg.payload?.game_mode === 'TIMER') {
           setGameRemainingSeconds(msg.payload?.game_duration_seconds || 1200);
         } else {
@@ -164,8 +167,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         setRoom((prev) => (prev ? { ...prev, state: 'HEAD_START' } : prev));
         break;
+      }
 
       case 'GAME_ENDED':
+        latestPingCycleRef.current = 0;
         setTimerPhase('LOBBY');
         setChasseReveals([]);
         setGameRemainingSeconds(null);
@@ -182,7 +187,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       case 'TIMER_TICK':
         if (msg.payload) {
-          setTimerPhase(msg.payload.phase);
+          const nextPhase = msg.payload.phase;
+          setTimerPhase(nextPhase);
           setTimerSeconds(msg.payload.remaining_seconds);
           setTimerTotal(msg.payload.total_seconds);
           if (typeof msg.payload.game_remaining_seconds === 'number') {
@@ -190,25 +196,37 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           } else {
             setGameRemainingSeconds(null);
           }
-          if (msg.payload.phase) {
-            setRoom((prev) => (prev ? { ...prev, state: msg.payload.phase } : prev));
+          if (nextPhase) {
+            setRoom((prev) => {
+              if (!prev) return prev;
+              // Empêcher un tick HEAD_START retardé de faire régresser un état déjà en HUNTING
+              if (prev.state === 'HUNTING' && nextPhase === 'HEAD_START') {
+                return prev;
+              }
+              return { ...prev, state: nextPhase };
+            });
           }
         }
         break;
 
       case 'LOCATION_REVEAL':
-      case 'HUNTED_POSITIONS_REVEAL':
-        const markers =
+      case 'HUNTED_POSITIONS_REVEAL': {
+        const incomingCycle = msg.payload?.ping_cycle_index ?? msg.ping_cycle_index ?? latestPingCycleRef.current;
+        const markers: ChasseReveal[] =
           msg.payload?.markers ||
           msg.payload?.chasses ||
           msg.markers ||
           msg.hunted_positions ||
           [];
-        setChasseReveals(markers);
+        if (Array.isArray(markers) && incomingCycle >= latestPingCycleRef.current) {
+          latestPingCycleRef.current = incomingCycle;
+          setChasseReveals(markers);
+        }
         break;
+      }
 
       case 'ERROR':
-        alert(`Erreur: ${msg.payload?.message || msg.reason || 'Une erreur est survenue'}`);
+        alert(`Erreur : ${msg.payload?.message || msg.reason || 'Une erreur est survenue'}`);
         break;
     }
   };
@@ -221,7 +239,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return url;
   };
 
-  const createRoom = async (name: string, selectedRole: Role): Promise<string> => {
+  const createRoom = async (name: string): Promise<string> => {
     const httpUrl = getCleanHttpUrl(serverUrl);
     const res = await fetch(`${httpUrl}/create-game`, {
       method: 'POST',
@@ -234,43 +252,64 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const code = data.room_code;
 
     setPlayerName(name);
-    setRole(selectedRole);
+    latestPlayerNameRef.current = name;
 
     addUrlToHistory(serverUrl);
-    await connectWebSocketAndJoin(code, name, selectedRole);
+    await connectWebSocketAndJoin(code, name);
     return code;
   };
 
-  const joinRoom = async (roomCode: string, name: string, selectedRole: Role): Promise<void> => {
+  const joinRoom = async (roomCode: string, name: string): Promise<void> => {
     setPlayerName(name);
-    setRole(selectedRole);
+    latestPlayerNameRef.current = name;
     addUrlToHistory(serverUrl);
-    await connectWebSocketAndJoin(roomCode, name, selectedRole);
+    await connectWebSocketAndJoin(roomCode, name);
   };
 
-  const connectWebSocketAndJoin = async (roomCode: string, name: string, selectedRole: Role) => {
+  const connectWebSocketAndJoin = async (roomCode: string, name: string) => {
     if (wsRef.current) {
-      wsRef.current.disconnect();
+      wsRef.current.disconnect(true);
     }
 
-    const ws = new GameWebSocket(serverUrl, roomCode, playerId, selectedRole);
+    const ws = new GameWebSocket(serverUrl, roomCode, playerId, 'chasse');
     wsRef.current = ws;
 
     ws.subscribe(handleWSMessage);
+
+    // À chaque reconnexion automatique après micro-coupure, re-synchroniser le pseudo et la dernière position GPS
+    ws.onReconnect(() => {
+      ws.send({
+        action: 'JOIN_ROOM',
+        payload: { player_name: latestPlayerNameRef.current || name },
+      });
+      if (latestLocationRef.current) {
+        ws.send({
+          action: 'UPDATE_LOCATION',
+          payload: latestLocationRef.current,
+        });
+      }
+    });
+
     await ws.connect();
 
     ws.send({
       action: 'JOIN_ROOM',
-      payload: { player_name: name, role: selectedRole },
+      payload: { player_name: name },
     });
 
     try {
       await startBackgroundLocationUpdates(roomCode, playerId, serverUrl, (lat, lng) => {
-        setMyLocation({ latitude: lat, longitude: lng });
-        ws.send({
+        const coords = { latitude: lat, longitude: lng };
+        latestLocationRef.current = coords;
+        setMyLocation(coords);
+        const sent = ws.send({
           action: 'UPDATE_LOCATION',
-          payload: { latitude: lat, longitude: lng },
+          payload: coords,
         });
+        // Si le WebSocket est temporairement en cours de reconnexion, envoyer en HTTP
+        if (!sent) {
+          postLocationHttpFallback(roomCode, playerId, serverUrl, lat, lng);
+        }
       });
     } catch (err) {
       console.warn('[GameContext] GPS setup warning:', err);
@@ -324,9 +363,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const disconnect = () => {
     stopBackgroundLocationUpdates();
     if (wsRef.current) {
-      wsRef.current.disconnect();
+      wsRef.current.disconnect(true);
       wsRef.current = null;
     }
+    latestPingCycleRef.current = 0;
     setRoom(null);
     setTimerPhase('LOBBY');
     setChasseReveals([]);
